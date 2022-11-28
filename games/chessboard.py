@@ -67,20 +67,22 @@ class ChessGame(AbstractGame):
         self.game.pop()
 
     def state(self):
-        
-        positions = [line.split(" ") for line in str(self.game).split("\n")]
+        H, W = 8,8
+        positions = [game.game.piece_at(chess.square(i, j)).symbol() 
+                        for i,j in product(range(H), range(W))
+                        if game.game.piece_at(chess.square(i, j)) is not None else ' ']
         # return positions
-        H, W = len(positions), len(positions[0])
-        state = np.zeros((H, W, len(pieces)+5))
+        
+        state = np.zeros((H, W, len(pieces)+6), dtype=np.float32)
         for i, j in product(range(H), range(W)):
-            if positions[i][j].upper() in pieces:
+            if positions[i][j] is not None:
                 # White pieces are +1, black pieces are -1
                 state[i, j, pieces.index(positions[i][j].upper())] = +1 if positions[i][j].isupper() else -1
 
         KW, KB = self.game.has_kingside_castling_rights(chess.WHITE), self.game.has_kingside_castling_rights(chess.BLACK)
         QW, QB = self.game.has_queenside_castling_rights(chess.WHITE), self.game.has_queenside_castling_rights(chess.BLACK)
         state[:, :, len(pieces)].fill(self.turn)
-        state[:, :, len(pieces)+1].fill(self.game.ply)
+        state[:, :, len(pieces)+1].fill(self.game.ply())
         state[:, :, len(pieces)+2].fill(1 if KW else 0)
         state[:, :, len(pieces)+3].fill(1 if QW else 0)
         state[:, :, len(pieces)+4].fill(1 if KB else 0)

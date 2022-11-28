@@ -35,7 +35,7 @@ class MCTSController(object):
 	Runs a single, random heuristic guided playout starting from a given state. This updates the 'visits' and 'differential'
 	counts for that state, as well as likely updating many children states.
 	"""
-	def playout(self, game, expand=150):
+	def playout(self, game, expand=20):
 
 		if expand == 0 or game.over():
 			score = game.score()

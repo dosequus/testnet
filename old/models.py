@@ -90,6 +90,7 @@ class AbstractModel(nn.Module):
         data, data_pred = self.__consume_batch(data, mask_missing=True)
         data = torchify(data)
         loss = self.loss(data, data_pred)
+        print("loss: ", loss)
         loss.backward()
 
         self.optimizer.step()

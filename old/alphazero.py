@@ -44,6 +44,7 @@ class AlphaZeroController(MCTSController):
 	def value(self, game, playouts=100, steps=2):
 
 		V = super().value(game, playouts=playouts, steps=steps)
+		print("Branch ended in: ", V)
 		dataset = [{'input': game.state(), 'target': V}]
 		for i in range(0, steps):
 			self.model.fit(dataset, batch_size=1, verbose=False)
@@ -74,9 +75,9 @@ class AlphaZeroController(MCTSController):
 			network_mapping[action] = self.network_value(game)
 			game.undo_move()
 
-		print ({a: "{0:.2f}".format(action_mapping[a]) for a in action_mapping})
-		print ({a: "{0:.2f}".format(previous_mapping[a]) for a in action_mapping})
-		print ({a: "{0:.2f}".format(network_mapping[a]) for a in action_mapping})
+		print ("Playout value: ", {a: "{0:.2f}".format(action_mapping[a]) for a in sorted(action_mapping, key=action_mapping.get)})
+		print ("Old value: ", {a: "{0:.2f}".format(previous_mapping[a]) for a in sorted(action_mapping, key=action_mapping.get)})
+		print ("New values: ", {a: "{0:.2f}".format(network_mapping[a]) for a in sorted(action_mapping, key=action_mapping.get)})
 
 		moves = action_mapping.keys()
 		data1 = [action_mapping[action] for action in moves]
