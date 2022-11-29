@@ -68,16 +68,13 @@ class ChessGame(AbstractGame):
 
     def state(self):
         H, W = 8,8
-        positions = [game.game.piece_at(chess.square(i, j)).symbol() 
-                        for i,j in product(range(H), range(W))
-                        if game.game.piece_at(chess.square(i, j)) is not None else ' ']
-        # return positions
         
         state = np.zeros((H, W, len(pieces)+6), dtype=np.float32)
-        for i, j in product(range(H), range(W)):
-            if positions[i][j] is not None:
+        for i, j in product(range(W), range(H)):
+            piece = self.game.piece_at(chess.square(i, j))
+            if piece:
                 # White pieces are +1, black pieces are -1
-                state[i, j, pieces.index(positions[i][j].upper())] = +1 if positions[i][j].isupper() else -1
+                state[i, j, pieces.index(piece.symbol().upper())] = +1 if piece.symbol().isupper() else -1
 
         KW, KB = self.game.has_kingside_castling_rights(chess.WHITE), self.game.has_kingside_castling_rights(chess.BLACK)
         QW, QB = self.game.has_queenside_castling_rights(chess.WHITE), self.game.has_queenside_castling_rights(chess.BLACK)
