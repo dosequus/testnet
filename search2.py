@@ -81,7 +81,7 @@ def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
             # ------------------------------------------------------------------
             curr_node.backup()
             if depth == max_depth:
-                # At this point we want to do something with the root node
-                # presumably save the weights of its children or smth?
+                # Update pi based on root nodes final values
                 root.update_pi(pi, sim)
                 break
+    return pi
