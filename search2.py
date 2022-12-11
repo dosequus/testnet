@@ -50,15 +50,20 @@ class Node:
             self.parent.action_val = new_action_val / self.parent.visit_count
             self.parent.backup()
 
+    def update_pi(self, pi, sim):
+        for move, child in self.children.items():
+            pi[move] = pi[move] - (pi[move] - child.action_val) / sim
+
 
 def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
-    for _ in range(num_sim):
+    pi = {}
+    for sim in range(num_sim):
         root = Node(None, game.state())
         # Start MCTS
         while True:
-            # ----------------------------------------------------------------------
-            #                                  SELECT
-            # ----------------------------------------------------------------------
+            # ------------------------------------------------------------------
+            #                              SELECT
+            # ------------------------------------------------------------------
             # Initialize our depth count and start at root
             depth = 0
             curr_node = root
@@ -67,16 +72,16 @@ def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
                 _, curr_node = curr_node.select()
                 depth = depth + 1
             # curr_node is now the best leaf node
-            # ----------------------------------------------------------------------
-            #                                  EXPAND
-            # ----------------------------------------------------------------------
+            # ------------------------------------------------------------------
+            #                              EXPAND
+            # ------------------------------------------------------------------
             curr_node.expand(model, game)
-            # ----------------------------------------------------------------------
-            #                                  BACKUP
-            # ----------------------------------------------------------------------
+            # ------------------------------------------------------------------
+            #                              BACKUP
+            # ------------------------------------------------------------------
             curr_node.backup()
             if depth == max_depth:
                 # At this point we want to do something with the root node
                 # presumably save the weights of its children or smth?
+                root.update_pi(pi, sim)
                 break
-            depth = 0
