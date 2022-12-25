@@ -19,6 +19,7 @@ class ChessGame(AbstractGame):
     def __init__(self, fen=chess.Board().fen()):
         super().__init__()
         self.game = chess.Board(fen)
+        self.ply = 0
 
     @property
     def turn(self):
@@ -79,13 +80,40 @@ class ChessGame(AbstractGame):
         KW, KB = self.game.has_kingside_castling_rights(chess.WHITE), self.game.has_kingside_castling_rights(chess.BLACK)
         QW, QB = self.game.has_queenside_castling_rights(chess.WHITE), self.game.has_queenside_castling_rights(chess.BLACK)
         state[:, :, len(pieces)].fill(self.turn)
-        state[:, :, len(pieces)+1].fill(self.game.ply())
+        state[:, :, len(pieces)+1].fill(self.ply)
         state[:, :, len(pieces)+2].fill(1 if KW else 0)
         state[:, :, len(pieces)+3].fill(1 if QW else 0)
         state[:, :, len(pieces)+4].fill(1 if KB else 0)
         state[:, :, len(pieces)+5].fill(1 if QB else 0)
 
-        return state 
+        return state
+
+    @classmethod
+    def load(cls, state : np.ndarray):
+        piece_map = {} # piece letter => k value
+        H, W = 8,8
+        for k in range(len(pieces)):
+            for i, j in product(range(W), range(H)):
+                if state[i, j, k] == 1:
+                    piece_map[chess.square(i,j)] = chess.Piece.from_symbol(pieces[k])
+                if state[i, j, k] == -1:
+                    piece_map[chess.square(i,j)] = chess.Piece.from_symbol(pieces[k].lower())    
+        game = ChessGame()
+        game.game.set_piece_map(piece_map)
+        game.game.turn = 1 if state[0,0, len(pieces)] else 0
+        game.ply = state[0,0,len(pieces)+1]
+        castling = ""
+        if state[0,0,len(pieces)+2]: castling += 'K'
+        if state[0,0,len(pieces)+3]: castling += 'Q'
+        if state[0,0,len(pieces)+4]: castling += 'k'
+        if state[0,0,len(pieces)+5]: castling += 'q'
+        game.game.set_castling_fen(castling)
+
+        return game
+                    
+
+
+
 
     def __str__(self):
         return str(self.game)
