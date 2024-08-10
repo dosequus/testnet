@@ -1,0 +1,15 @@
+model:
+  learning_rate: 0.001
+  policy_output_size: 4672  # For 8x8x73 stack
+  value_output_size: 1
+
+training:
+  num_epochs: 10
+  num_self_play_games: 64
+  num_simulations: 1
+  max_depth: 5
+  batch_size: 2048
+  replay_buffer_size: 10000
+  evaluation_interval: 10  # Evaluate every 10 iterations
+  save_model: true
+  model_checkpoint_dir: "checkpoints/"
