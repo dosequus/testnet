@@ -35,7 +35,7 @@ class TransformerNet(nn.Module):
         self.value_head = nn.Sequential(
             nn.Linear(16, 64),
             nn.GELU(),
-            nn.Linear(64, 1),
+            nn.Linear(64, 3),
         ).to(self.device)
         
         self.policy_head = nn.Sequential(
@@ -68,9 +68,8 @@ class TransformerNet(nn.Module):
 
         # Forward pass through the value head
         v = self.value_head(z)
-        v = v.reshape(batch_size, -1).sum(dim=1)
-        v = torch.tanh(v)
-
+        v = v.reshape(batch_size, -1, 3).sum(dim=1)
+        v = F.softmax(v, dim=-1)
         # Forward pass through the policy head
         pi = self.policy_head(z)
         pi = pi.reshape(batch_size, 8, 8, -1)

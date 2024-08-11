@@ -2,6 +2,7 @@ import torch
 import math
 import numpy as np
 import tqdm
+from chess import Move
 from collections import defaultdict
 
 from games.chessboard import ChessGame
@@ -40,7 +41,14 @@ class Node:
         pi, val = model.predict_single(torch.from_numpy(self.state), _get_move_mask(game))
         pred_moves = model.pi_to_move_map(
             pi, game.valid_moves(), game.game.piece_map())
-        self.action_val = val
+        
+        win_prob, draw_prob, loss_prob = val
+        
+        if game.turn == 1:  # White's turn
+            self.action_val = win_prob - loss_prob
+        else:  # Black's turn
+            self.action_val = loss_prob - win_prob
+        
         self.children = {move: self.create_child(move, eval) for move, eval in pred_moves.items()}
 
     def backup(self):
@@ -58,7 +66,7 @@ class Node:
             pi[move] = pi[move] - (pi[move] - child.action_val) / sim
 
 
-def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
+def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50) -> tuple[Node | None, Move]:
     pi = defaultdict(int)
     root = None
     for sim in range(1,num_sim+1):
@@ -70,7 +78,7 @@ def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
             #                              SELECT
             # ------------------------------------------------------------------
             # Initialize our depth count and start at root
-            depth = 1
+            depth = 0
             curr_node = root
             # while curr_node is not a leaf
             while len(curr_node.children) > 0:
@@ -86,7 +94,8 @@ def run(game: ChessGame, model: TransformerNet, num_sim=10, max_depth=50):
             #                              BACKUP
             # ------------------------------------------------------------------
             curr_node.backup()
-            if depth == max_depth or root.visit_count > 100:
+            print(f"simulation {sim}/{num_sim} -- explored {root.visit_count} nodes               ", end='\r')
+            if depth == max_depth or root.visit_count > 1000:
                 # Update pi based on root nodes final values
                 root.update_pi(pi, sim)
                 break
