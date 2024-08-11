@@ -54,7 +54,6 @@ def selfplay_benchmark(new_model, previous_model_path, num_games=10, device='cpu
     draws = 0
 
     for game in range(num_games):
-        break
         # Alternate who plays as white/black
         if game % 2 == 0:
             result = play_game(new_model, previous_model)
