@@ -11,11 +11,12 @@ training:
   num_self_play_games: 10
   num_simulations: 2
   max_depth: 50
-  batch_size: 64
+  batch_size: 32
   replay_buffer_size: 10000
-  evaluation_interval: 100  # Evaluate every 10 iterations
+  evaluation_interval: 10  # Evaluate every 10 iterations
   save_model: true
   model_checkpoint_dir: "checkpoints/"
+  training_steps: 10
 
 evaluation:
   num_simulations: 5

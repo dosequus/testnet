@@ -50,7 +50,6 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
                 game.make_move(best_move)
             
             result = game.score()
-            
             # Create the target result tensor based on the outcome
             if result == 1:  # Win
                 target_result = torch.tensor([1.0, 0.0, 0.0])  # [win, draw, loss]
@@ -62,38 +61,38 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
             for s, p, m in zip(states, policies, masks):
                 memory.append((s, p, m, target_result))
 
+        for _ in tqdm.range(config.training.training_steps):
+            if len(memory) >= config.training.batch_size:
+                batch = random.sample(memory, config.training.batch_size)
+                state_batch, policy_batch, mask_batch, value_batch = zip(*batch)
                 
-        if len(memory) >= config.training.batch_size:
-            batch = random.sample(memory, config.training.batch_size)
-            state_batch, policy_batch, mask_batch, value_batch = zip(*batch)
-            
-            # Convert batch lists to tensors
-            state_tensor = torch.stack(state_batch).to(device)  # Shape: [batch_size, 12, 8, 8]
-            policy_tensor = torch.stack(policy_batch).to(device)  # Shape: [batch_size, 8, 8, 73]
-            mask_tensor = torch.stack(mask_batch).to(device)  # Shape: [batch_size, 8, 8]
-            value_tensor = torch.stack(value_batch).to(device)  # Shape: [batch_size]
-            
-            # Forward pass
-            predicted_policies, predicted_values = model(state_tensor, mask_tensor)
-            # Compute loss
-            predicted_policies = predicted_policies.reshape(config.training.batch_size, config.model.policy_output_size)
-            # print(predicted_policies.shape, policy_tensor.shape)
+                # Convert batch lists to tensors
+                state_tensor = torch.stack(state_batch).to(device)  # Shape: [batch_size, 12, 8, 8]
+                policy_tensor = torch.stack(policy_batch).to(device)  # Shape: [batch_size, 8, 8, 73]
+                mask_tensor = torch.stack(mask_batch).to(device)  # Shape: [batch_size, 8, 8]
+                value_tensor = torch.stack(value_batch).to(device)  # Shape: [batch_size]
+                
+                # Forward pass
+                predicted_policies, predicted_values = model(state_tensor, mask_tensor)
+                # Compute loss
+                predicted_policies = predicted_policies.reshape(config.training.batch_size, config.model.policy_output_size)
+                # print(predicted_policies.shape, policy_tensor.shape)
 
-            policy_loss = nn.CrossEntropyLoss()(predicted_policies, policy_tensor)
-            # print(predicted_values.shape, value_tensor.shape)
-            value_loss = nn.MSELoss()(predicted_values, value_tensor)
-            # print(policy_loss.shape, value_loss.shape)
-            
-            total_loss = policy_loss + value_loss
-            # Backpropagation and optimization
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-            
-        print(f"total loss: {total_loss.item()}") 
+                policy_loss = nn.CrossEntropyLoss()(predicted_policies, policy_tensor)
+                # print(predicted_values.shape, value_tensor.shape)
+                value_loss = nn.MSELoss()(predicted_values, value_tensor)
+                # print(policy_loss.shape, value_loss.shape)
+                
+                total_loss = policy_loss + value_loss
+                # Backpropagation and optimization
+                optimizer.zero_grad()
+                total_loss.backward()
+                optimizer.step()
+                
+            print(f"total loss: {total_loss.item()}") 
                 
                     
-        if (epoch+1) % 10 == 0:  # Evaluate every 10 iterations
+        if (epoch+1) % config.training.evaluation_interval == 0:  # Evaluate every 10 iterations
             evaluate.stockfish_benchmark(mcts, device=device)
             # Save the model
             stamp = str(int(time.time()))
