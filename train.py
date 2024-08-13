@@ -10,18 +10,19 @@ from settings import Configuration
 import tqdm
 import time
 from collections import deque
+import os
 import evaluate
 
 config = Configuration().get_config()
 
-def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
+def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', starting_epoch=0):
     
     memory = deque(maxlen=config.training.replay_buffer_size)
     total_loss = torch.tensor(0)
     
     mcts = search.MCTS(model)
     
-    for epoch in range(config.training.num_epochs):
+    for epoch in range(starting_epoch, config.training.num_epochs):
         print(f"Epoch: {epoch+1}")
         # self play
         for _ in tqdm.trange(config.training.num_self_play_games):
@@ -32,15 +33,15 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
             masks = []
             
             while not game.over():
-                # print("\n===============")
-                # print(game.game)
-                # print("===============")
+                print("\n===============")
+                print(game.game)
+                print("===============")
                 root, best_move = mcts.run(game.copy(), 
                                            max_depth=config.training.max_depth, 
                                            num_sim=config.training.num_simulations, 
                                            max_nodes=config.mcts.max_nodes)
                 
-                total_visits = sum(child.visit_count for child in root.children.values())
+                total_visits = 1+sum(child.visit_count for child in root.children.values())
                 policy_map = { move : torch.tensor(node.visit_count/total_visits) for move, node in root.children.items() }
                 
                 states.append(torch.tensor(game.state, dtype=torch.float32))
@@ -52,16 +53,34 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
             result = game.score()
             # Create the target result tensor based on the outcome
             if result == 1:  # Win
+                print("white won")
                 target_result = torch.tensor([1.0, 0.0, 0.0])  # [win, draw, loss]
             elif result == 0:  # Draw
+                if game.game.is_fifty_moves():
+                    print("draw due to fifty moves without capture")
+                elif game.game.is_insufficient_material():
+                    print("draw due to insufficient material")
+                elif game.game.is_fivefold_repetition():
+                    print("draw due to 5-fold-repetition")
+                    
                 target_result = torch.tensor([0.0, 1.0, 0.0])  
             else:  # Loss
+                print("black won")
                 target_result = torch.tensor([0.0, 0.0, 1.0]) 
             
+            
             for s, p, m in zip(states, policies, masks):
-                memory.append((s, p, m, target_result))
+                TURN_MASK = 6
+                # Check the TURN_MASK to determine if the current player is black
+                current_turn = s[0,0,TURN_MASK]  # Access the first element to determine the turn
 
-        for _ in tqdm.range(config.training.training_steps):
+                if current_turn.item() == -1:  # If the current player is black
+                    # Reverse the target_result (swap win and loss probabilities)
+                    memory.append((s, p, m, target_result.flip(0)))
+                else:
+                    memory.append((s, p, m, target_result))
+
+        for _ in tqdm.trange(config.training.training_steps):
             if len(memory) >= config.training.batch_size:
                 batch = random.sample(memory, config.training.batch_size)
                 state_batch, policy_batch, mask_batch, value_batch = zip(*batch)
@@ -89,7 +108,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
                 total_loss.backward()
                 optimizer.step()
                 
-            print(f"total loss: {total_loss.item()}") 
+        print(f"total loss: {total_loss.item()}") 
                 
                     
         if (epoch+1) % config.training.evaluation_interval == 0:  # Evaluate every 10 iterations
@@ -105,9 +124,28 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
         # print(total_loss)
 
 if __name__ == '__main__':
-    # print(torch.backends.mps.)
-    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+    # Determine the device to use: CUDA > MPS > CPU
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu') 
     print(device.type)
+    
     model = TransformerNet(device=device)
     optimizer = optim.Adam(model.parameters(), lr=config.model.learning_rate)
-    train(model, optimizer, device)
+    checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
+    epoch = 0
+    if os.path.isfile(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=model.device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        print("Checkpoint loaded successfully.")
+    else:
+        print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
+    
+    
+    train(model, optimizer, device, epoch)

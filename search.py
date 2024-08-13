@@ -22,30 +22,58 @@ def _get_move_mask(game: ChessGame) -> torch.Tensor:
 
 
 class MCTS:
-    def __init__(self, nnet: TransformerNet):
+    def __init__(self, nnet: TransformerNet, explore_factor=np.sqrt(2)):
         self.nnet = nnet
         self.memo = {}
+        self.explore_factor = explore_factor
 
     class Node:
-        def __init__(self, parent, state, prior_prob=0):
+        def __init__(self, parent, state, temperature, prior_prob=0):
             self.parent = parent
             self.state = state
+            self.temperature = temperature
             self.children = {}
             self.prior_prob = prior_prob
             self.visit_count = 0
             self.action_val = 0
-
+            
         def UCB(self):
             return self.prior_prob / (1 + self.visit_count)
 
         def select(self):
-            """ Select the child node with the highest action value plus UCB. """
-            best_move, best_child = max(self.children.items(), key=lambda x: x[1].action_val + x[1].UCB())
+            """ 
+            Select the child node using a temperature parameter to balance exploration and exploitation. 
+
+            temperature = 1.0: Balanced exploration and exploitation.
+            temperature = 0.1: More deterministic selection, favoring the best scores.
+            temperature = 0.0: Purely deterministic selection, equivalent to always choosing the highest score
+        
+            """
+            # Get the action values and UCB scores for each child
+            scores = np.array([child.action_val + child.UCB() for child in self.children.values()])
+            
+            # Apply the temperature to the scores
+            if self.temperature > 0:
+                scaled_scores = scores / self.temperature
+            else:
+                scaled_scores = scores
+
+            # Calculate probabilities using softmax
+            exp_scores = np.exp(scaled_scores - np.max(scaled_scores))  # Subtract max for numerical stability
+            probabilities = exp_scores / np.sum(exp_scores)
+
+            # Choose a child node based on the probabilities
+            chosen_index = np.random.choice(len(self.children), p=probabilities)
+            
+            # Get the corresponding move and child node
+            best_move = list(self.children.keys())[chosen_index]
+            best_child = list(self.children.values())[chosen_index]
+            
             return best_move, best_child
 
         def create_child(self, move, val):
             new_state = ChessGame.next_state(self.state, move)
-            return MCTS.Node(self, new_state, prior_prob=val)
+            return MCTS.Node(self, new_state, self.temperature*.70, prior_prob=val)
 
         def expand(self, nnet: TransformerNet, memo):
             game = ChessGame.load(self.state)
@@ -62,10 +90,12 @@ class MCTS:
 
             win_prob, draw_prob, loss_prob = val
 
+            # TODO this should probably depend on the player right?
             if game.turn == 1:  # White's turn
-                self.action_val = win_prob - loss_prob
+                # Prioritize wins > draws > losses
+                self.action_val = win_prob + draw_prob / 2 - loss_prob
             else:  # Black's turn
-                self.action_val = loss_prob - win_prob
+                self.action_val = loss_prob + draw_prob / 2 - win_prob
 
             # If this is a terminal state, memoize the result
             if game.over():
@@ -87,7 +117,7 @@ class MCTS:
                 pi[move] = pi[move] - (pi[move] - child.action_val) / sim
                 
     def _simulate(self, game, max_depth, max_nodes):
-        root = self.Node(None, game.state)
+        root = self.Node(None, game.state, self.explore_factor)
         depth = 0
         curr_node = root
 

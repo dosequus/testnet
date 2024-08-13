@@ -127,7 +127,9 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
                 best_move = Move.from_uci(stockfish.get_best_move())
             
             game.make_move(best_move)
+            print("\n===============")
             print(game.game)
+            print("===============")
         
         result = game.score()
         return result  # 1 if model1 wins, 0 if draw, -1 if model2 wins
