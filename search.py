@@ -1,129 +1,131 @@
 import torch
 import math
+import logging
 import numpy as np
 
-from games.chessboard import ChessGame
+import concurrent.futures
 
+from collections import defaultdict
+
+from chess import Move
+from games.chessboard import ChessGame
 from model import TransformerNet
 
 
-def score(parent, child):
-    prior = child.prior * math.sqrt(parent.prior / (child.visit_count + 1))
-
-    if child.visit_count > 0:
-        value = -child.value()
-    else:
-        value = 0
-
-    return value + prior
+logger = logging.getLogger(__name__)
 
 
-class Node:
-    def __init__(self, prior, player) -> None:
-        self.visited = 0
-        self.player = player
-        self.prior = prior
-        self.value_sum = 0
-        self.children = {}
-        self.state = None
-
-    @property
-    def leaf(self):
-        return len(self.children) == 0
-
-    def value(self):
-        if self.visited == 0:
-            return 0
-        else:
-            return self.value_sum / self.visited
-
-    def select_action(self, temperature):
-        visit_counts = np.array(
-            (child.visited for child in self.children.values()))
-        actions = (action for action in self.children.keys())
-
-        if temperature == 0:
-            action = actions[np.argmax(visit_counts)]
-        elif temperature == float('inf'):
-            action = np.random.choice(actions)
-        else:
-            visited_distribution = visit_counts ** (1/temperature)
-            visited_distribution = visited_distribution / \
-                np.sum(visited_distribution)
-            action = np.random.choice(actions, p=visited_distribution)
-        return action
-
-    def select_child(self):
-        best_score = -np.inf
-        best_action = -1
-        best_child = None
-
-        for action, child in self.children.items():
-            score = score(self, child)
-            if score > best_score:
-                best_score = score
-                best_action = action
-                best_child = child
-
-        return best_action, best_child
-
-    def expand(self, state, player, pi):
-        self.player = player
-        self.state = state
-        for a, pr in enumerate(pi):
-            if pr != 0:
-                self.children[a] = Node(prior=pr, player=(self.player * -1))
+def _get_move_mask(game: ChessGame) -> torch.Tensor:
+    moves = game.valid_moves()
+    pieces = game.game.piece_map()
+    return TransformerNet.get_legal_move_mask(moves, pieces)
 
 
 class MCTS:
+    def __init__(self, nnet: TransformerNet):
+        self.nnet = nnet
+        self.memo = {}
 
-    def __init__(self, game: ChessGame, **kwargs) -> None:
-        self.game = game
-        self.num_simulations = kwargs.get('num_simulations')
+    class Node:
+        def __init__(self, parent, state, prior_prob=0):
+            self.parent = parent
+            self.state = state
+            self.children = {}
+            self.prior_prob = prior_prob
+            self.visit_count = 0
+            self.action_val = 0
 
-    def best_move(self, model: TransformerNet):
-        root = self.run(self.game, model, self.game.turn)
-        return root.select_action(0)
+        def UCB(self):
+            return self.prior_prob / (1 + self.visit_count)
 
-    def run(self, game: ChessGame, model: TransformerNet, player, depth=50):
-        root = Node(0, player)
+        def select(self):
+            """ Select the child node with the highest action value plus UCB. """
+            best_move, best_child = max(self.children.items(), key=lambda x: x[1].action_val + x[1].UCB())
+            return best_move, best_child
 
-        state = game.state()
-        valid_moves = game.valid_moves()
-        pi = np.array(((mv, math.pow(len(valid_moves), -1))
-                       for mv in valid_moves))
+        def create_child(self, move, val):
+            new_state = ChessGame.next_state(self.state, move)
+            return MCTS.Node(self, new_state, prior_prob=val)
 
-        root.expand(state, player=player, pi=pi)
+        def expand(self, nnet: TransformerNet, memo):
+            game = ChessGame.load(self.state)
 
-        for _ in range(self.num_simulations):
-            a, node = None, root
-            stack = [node]
-            curr_depth = depth
+            # Check if the current state has already been evaluated and is in memo
+            state_key = game.game.fen()  # Use FEN (Forsyth-Edwards Notation) as a unique identifier
+            if state_key in memo:
+                self.action_val = memo[state_key]
+                return
 
-            while not node.leaf:
-                a, node = node.select_child()
-                stack.append(node)
-                curr_depth -= 1
+            # Get model predictions
+            pi, val = nnet.predict_single(torch.from_numpy(self.state), _get_move_mask(game))
+            pred_moves = nnet.pi_to_move_map(pi, game.valid_moves(), game.game.piece_map())
 
-            # we are at a leaf node
-            # state = n
+            win_prob, draw_prob, loss_prob = val
 
-            # make a move
-            next_state = game.next_state(state, a)
-            value = game.state_score(player)
+            if game.turn == 1:  # White's turn
+                self.action_val = win_prob - loss_prob
+            else:  # Black's turn
+                self.action_val = loss_prob - win_prob
 
-            if value is None:
-                pi, value = model.predict(next_state, torch.empty(1))
-                # node.expand(next_state, player=)
+            # If this is a terminal state, memoize the result
+            if game.over():
+                memo[state_key] = self.action_val
 
-            # self.backup(stack, value, parent.player * -1)
-            if curr_depth == 0:
+            # Expand children
+            self.children = {move: self.create_child(move, eval) for move, eval in pred_moves.items()}
+
+        def backup(self):
+            if self.parent:
+                new_action_val = self.parent.action_val * self.parent.visit_count
+                new_action_val = new_action_val + self.action_val
+                self.parent.visit_count += 1
+                self.parent.action_val = new_action_val / self.parent.visit_count
+                self.parent.backup()
+
+        def update_pi(self, pi, sim):
+            for move, child in self.children.items():
+                pi[move] = pi[move] - (pi[move] - child.action_val) / sim
+                
+    def _simulate(self, game, max_depth, max_nodes):
+        root = self.Node(None, game.state)
+        depth = 0
+        curr_node = root
+
+        # Selection and Expansion phase
+        while not game.over():
+            # SELECT
+            while len(curr_node.children) > 0:
+                _, curr_node = curr_node.select()
+                depth += 1
+
+            # EXPAND
+            curr_node.expand(self.nnet, self.memo)
+
+            # BACKUP
+            curr_node.backup()
+
+            # Terminate if maximum depth or visit count reached
+            if depth == max_depth or root.visit_count > max_nodes:
                 break
-
         return root
 
-    def backup(self, stack: "list[Node]", value, player):
-        while stack:
-            node = stack.pop(-1)
-            node.value_sum += (value if node.player else -value)
-            node.visited += 1
+    def run(self, game: ChessGame, num_sim=10, max_depth=50, max_nodes=10) -> tuple[Node | None, Move]:
+        pi = defaultdict(int)
+        roots = []
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self._simulate, game.copy(), max_depth, max_nodes) for _ in range(num_sim)]
+            
+            for future in concurrent.futures.as_completed(futures):
+                root = future.result()
+                if root:
+                    roots.append(root)
+        
+        for sim, root in enumerate(roots):
+            root.update_pi(pi, sim+1)
+
+        return roots[-1] if roots else None, max(pi, key=pi.get)
+
+# Example usage:
+# mcts = MCTS(model)
+# root, best_move = mcts.run(game, num_sim=100, max_depth=50)

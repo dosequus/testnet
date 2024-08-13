@@ -4,20 +4,23 @@ import torch.nn as nn
 from games.chessboard import ChessGame
 from model import TransformerNet
 import torch.optim as optim
-import search2
+import search
 import random
-from settings import load_config
+from settings import Configuration
 import tqdm
 import time
 from collections import deque
 import evaluate
 
-config = load_config()
+config = Configuration().get_config()
 
 def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
     
     memory = deque(maxlen=config.training.replay_buffer_size)
     total_loss = torch.tensor(0)
+    
+    mcts = search.MCTS(model)
+    
     for epoch in range(config.training.num_epochs):
         print(f"Epoch: {epoch+1}")
         # self play
@@ -30,11 +33,12 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
             
             while not game.over():
                 # print("\n===============")
-                print(game.game)
+                # print(game.game)
                 # print("===============")
-                root, best_move = search2.run(game.copy(), model, 
-                                                    max_depth=config.training.max_depth, 
-                                                    num_sim=config.training.num_simulations)
+                root, best_move = mcts.run(game.copy(), 
+                                           max_depth=config.training.max_depth, 
+                                           num_sim=config.training.num_simulations, 
+                                           max_nodes=config.mcts.max_nodes)
                 
                 total_visits = sum(child.visit_count for child in root.children.values())
                 policy_map = { move : torch.tensor(node.visit_count/total_visits) for move, node in root.children.items() }
@@ -56,7 +60,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
                 target_result = torch.tensor([0.0, 0.0, 1.0]) 
             
             for s, p, m in zip(states, policies, masks):
-                memory.append((s, p, m, result))
+                memory.append((s, p, m, target_result))
 
                 
         if len(memory) >= config.training.batch_size:
@@ -67,11 +71,10 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
             state_tensor = torch.stack(state_batch).to(device)  # Shape: [batch_size, 12, 8, 8]
             policy_tensor = torch.stack(policy_batch).to(device)  # Shape: [batch_size, 8, 8, 73]
             mask_tensor = torch.stack(mask_batch).to(device)  # Shape: [batch_size, 8, 8]
-            value_tensor = torch.tensor(value_batch).to(device)  # Shape: [batch_size]
+            value_tensor = torch.stack(value_batch).to(device)  # Shape: [batch_size]
             
             # Forward pass
             predicted_policies, predicted_values = model(state_tensor, mask_tensor)
-
             # Compute loss
             predicted_policies = predicted_policies.reshape(config.training.batch_size, config.model.policy_output_size)
             # print(predicted_policies.shape, policy_tensor.shape)
@@ -91,15 +94,15 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu'):
                 
                     
         if (epoch+1) % 10 == 0:  # Evaluate every 10 iterations
-            evaluate.stockfish_benchmark(model)
+            evaluate.stockfish_benchmark(mcts, device=device)
             # Save the model
-            stamp = str(time.time()//1)
+            stamp = str(int(time.time()))
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': total_loss,
-            }, f'checkpoints/model-{stamp}.pt') 
+            }, f'checkpoints/best-model.pt') 
         # print(total_loss)
 
 if __name__ == '__main__':

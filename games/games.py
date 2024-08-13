@@ -21,6 +21,7 @@ class AbstractGame(object):
 	def score(self):
 		return 0
 
+	@property
 	def state(self):
 		raise NotImplementedError()
 
@@ -29,4 +30,4 @@ class AbstractGame(object):
 		raise NotImplementedError()
 
 	def copy(self):
-		return self.load(self.state())
+		return self.load(self.state)

@@ -5,72 +5,72 @@ from games.chessboard import ChessGame
 from model import TransformerNet
 from chess import Move
 import torch.optim as optim
-import search2
+import search
 import random
-from settings import load_config
+from settings import Configuration
 import tqdm
 from stockfish import Stockfish
 from collections import deque
 
-config = load_config()
+config = Configuration().get_config()
 
-def selfplay_benchmark(new_model, previous_model_path, num_games=10, device='cpu', save_path='checkpoints/best_model'):
-    """
-    Evaluate the new model by playing a series of games against the previously saved benchmark model.
-    If the new model wins more games, it becomes the new benchmark and is saved.
+# def selfplay_benchmark(new_model, previous_model_path, num_games=10, device='cpu', save_path='checkpoints/best_model'):
+#     """
+#     Evaluate the new model by playing a series of games against the previously saved benchmark model.
+#     If the new model wins more games, it becomes the new benchmark and is saved.
     
-    Returns:
-    - bool: True if the new model becomes the new benchmark, False otherwise.
-    """
-    max_depth=config.evaluation.max_depth
-    num_sim=config.evaluation.num_simulations
-    def play_game(model1, model2):
-        """
-        Simulate a game between two models using the provided ChessGame and search2 logic.
-        Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
-        """
-        game = ChessGame()
+#     Returns:
+#     - bool: True if the new model becomes the new benchmark, False otherwise.
+#     """
+#     max_depth=config.evaluation.max_depth
+#     num_sim=config.evaluation.num_simulations
+#     def play_game(model1, model2):
+#         """
+#         Simulate a game between two models using the provided ChessGame and search2 logic.
+#         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
+#         """
+#         game = ChessGame()
         
-        while not game.over():
-            if game.current_player() == 'white':  # model1 plays as white
-                _, best_move = search2.run(game, model1, max_depth=max_depth, num_sim=num_sim)
-            else:  # model2 plays as black
-                _, best_move = search2.run(game, model2, max_depth=max_depth, num_sim=num_sim)
+#         while not game.over():
+#             if game.current_player() == 'white':  # model1 plays as white
+#                 _, best_move = search2.run(game, model1, max_depth=max_depth, num_sim=num_sim)
+#             else:  # model2 plays as black
+#                 _, best_move = search2.run(game, model2, max_depth=max_depth, num_sim=num_sim)
             
-            game.make_move(best_move)
+#             game.make_move(best_move)
         
-        result = game.score()
-        return result  # 1 if model1 wins, 0 if draw, -1 if model2 wins
+#         result = game.score()
+#         return result  # 1 if model1 wins, 0 if draw, -1 if model2 wins
 
-    # Load the previous model
-    previous_model = TransformerNet()
-    checkpoint = torch.load(previous_model_path, map_location=device)
-    previous_model.load_state_dict(checkpoint['model_state_dict'])
-    previous_model.to(device)
-    new_model.to(device)
+#     # Load the previous model
+#     previous_model = TransformerNet()
+#     checkpoint = torch.load(previous_model_path, map_location=device)
+#     previous_model.load_state_dict(checkpoint['model_state_dict'])
+#     previous_model.to(device)
+#     new_model.to(device)
 
-    new_model_wins = 0
-    previous_model_wins = 0
-    draws = 0
+#     new_model_wins = 0
+#     previous_model_wins = 0
+#     draws = 0
 
-    for game in range(num_games):
-        # Alternate who plays as white/black
-        if game % 2 == 0:
-            result = play_game(new_model, previous_model)
-        else:
-            result = play_game(previous_model, new_model)
-            result = -result  # Invert the result because the perspective is switched
+#     for game in range(num_games):
+#         # Alternate who plays as white/black
+#         if game % 2 == 0:
+#             result = play_game(new_model, previous_model)
+#         else:
+#             result = play_game(previous_model, new_model)
+#             result = -result  # Invert the result because the perspective is switched
 
-        if result == 1:
-            new_model_wins += 1
-        elif result == -1:
-            previous_model_wins += 1
-        else:
-            draws += 1
+#         if result == 1:
+#             new_model_wins += 1
+#         elif result == -1:
+#             previous_model_wins += 1
+#         else:
+#             draws += 1
 
-    print(f"New Model Wins: {new_model_wins}, Previous Model Wins: {previous_model_wins}, Draws: {draws}")
+#     print(f"New Model Wins: {new_model_wins}, Previous Model Wins: {previous_model_wins}, Draws: {draws}")
 
-def stockfish_benchmark(new_model, num_games=10, device='cpu', save_path='checkpoints/best_model'):
+def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model'):
     """
     Evaluate the new model by playing a series of games against the previously saved benchmark model.
     If the new model wins more games, it becomes the new benchmark and is saved.
@@ -85,7 +85,7 @@ def stockfish_benchmark(new_model, num_games=10, device='cpu', save_path='checkp
     - bool: True if the new model becomes the new benchmark, False otherwise.
     """
     
-    STOCKFISH_RATING = 500
+    stockfish_rating = 100
     max_depth=config.evaluation.max_depth
     num_sim=config.evaluation.num_simulations
     
@@ -111,17 +111,17 @@ def stockfish_benchmark(new_model, num_games=10, device='cpu', save_path='checkp
 
         return round(mid)
 
-    def play_game(model, color):
+    def play_game(mcts, color):
         """
         Simulate a game between two models using the provided ChessGame and search2 logic.
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
         game = ChessGame()
         stockfish = Stockfish(depth=max_depth) # keep stockfish at the same depth
-        stockfish.set_elo_rating(STOCKFISH_RATING)
+        stockfish.set_elo_rating(stockfish_rating)
         while not game.over():
             if game.turn == color:  # model1 plays as white
-                _, best_move = search2.run(game.copy(), model, max_depth=max_depth, num_sim=num_sim)
+                _, best_move = mcts.run(game.copy(), max_depth=max_depth, num_sim=num_sim)
             else:  
                 stockfish.set_fen_position(game.game.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())
@@ -135,27 +135,28 @@ def stockfish_benchmark(new_model, num_games=10, device='cpu', save_path='checkp
     # Load the previous model
     # previous_model = torch.load(previous_model_path, map_location=device)
 
-    new_model.to(device)
+    # new_model.to(device)
 
     new_model_wins = 0
     stockfish_wins = 0
     draws = 0
-
+    opponent_elos = []
     for game in tqdm.trange(num_games):
         # Alternate who plays as white/black
         if game % 2 == 0:
-            result = play_game(new_model, 1)
+            result = play_game(mcts, 1)
         else:
-            result = play_game(new_model, -1)
+            result = play_game(mcts, -1)
             result = -result  # Invert the result because the perspective is switched
-
+        opponent_elos.append(stockfish_rating)
         if result == 1:
             new_model_wins += 1
         elif result == -1:
             stockfish_wins += 1
+            stockfish_rating += 200
         else:
             draws += 1
 
-    rating = performance_rating([STOCKFISH_RATING]*num_games, new_model_wins+(0.5*draws)-stockfish_wins)
+    rating = performance_rating(opponent_elos, new_model_wins+(0.5*draws)-stockfish_wins)
     print(f"Tako Wins: {new_model_wins}, Stockfish Wins: {stockfish_wins}, Draws: {draws}")
     print(f"estimated elo: {rating}")
