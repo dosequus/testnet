@@ -11,6 +11,7 @@ from settings import Configuration
 import tqdm
 from stockfish import Stockfish
 from collections import deque
+from chessboard import display
 
 config = Configuration().get_config()
 
@@ -70,7 +71,7 @@ config = Configuration().get_config()
 
 #     print(f"New Model Wins: {new_model_wins}, Previous Model Wins: {previous_model_wins}, Draws: {draws}")
 
-def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model'):
+def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model', game_board=None):
     """
     Evaluate the new model by playing a series of games against the previously saved benchmark model.
     If the new model wins more games, it becomes the new benchmark and is saved.
@@ -117,6 +118,7 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
         game = ChessGame()
+        if game_board: display.update(game.game.fen(), game_board)
         stockfish = Stockfish(depth=max_depth) # keep stockfish at the same depth
         stockfish.set_elo_rating(stockfish_rating)
         while not game.over():
@@ -127,10 +129,8 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
                 best_move = Move.from_uci(stockfish.get_best_move())
             
             game.make_move(best_move)
-            print("\n===============")
-            print(game.game)
-            print("===============")
-        
+            if game_board: display.update(game.game.fen(), game_board)
+        if game_board: display.update(game.game.fen(), game_board)
         result = game.score()
         return result  # 1 if model1 wins, 0 if draw, -1 if model2 wins
 

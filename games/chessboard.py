@@ -7,7 +7,6 @@ import chess
 
 from games.games import AbstractGame
 import torch
-import IPython
 
 
 pieces = ["P", "K", "B", "R", "Q", "N"]

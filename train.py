@@ -12,10 +12,12 @@ import time
 from collections import deque
 import os
 import evaluate
+from chessboard import display
 
 config = Configuration().get_config()
 
 def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', starting_epoch=0):
+    if config.visualize: game_board = display.start()
     
     memory = deque(maxlen=config.training.replay_buffer_size)
     total_loss = torch.tensor(0)
@@ -33,9 +35,8 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
             masks = []
             
             while not game.over():
-                print("\n===============")
-                print(game.game)
-                print("===============")
+                if config.visualize: display.update(game.game.fen(), game_board)
+
                 root, best_move = mcts.run(game.copy(), 
                                            max_depth=config.training.max_depth, 
                                            num_sim=config.training.num_simulations, 
@@ -53,6 +54,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
             result = game.score()
             # Create the target result tensor based on the outcome
             if result == 1:  # Win
+                if config.visualize: display.update(game.game.fen(), game_board)
                 print("white won")
                 target_result = torch.tensor([1.0, 0.0, 0.0])  # [win, draw, loss]
             elif result == 0:  # Draw
@@ -65,6 +67,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
                     
                 target_result = torch.tensor([0.0, 1.0, 0.0])  
             else:  # Loss
+                if config.visualize: display.update(game.game.fen(), game_board)
                 print("black won")
                 target_result = torch.tensor([0.0, 0.0, 1.0]) 
             
