@@ -143,8 +143,10 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     stockfish_wins = 0
     draws = 0
     opponent_elos = []
-    for game in tqdm.trange(num_games):
+    pbar = tqdm.trange(num_games)
+    for game in pbar:
         # Alternate who plays as white/black
+        pbar.set_description(f'+{new_model_wins}={draws}-{stockfish_wins}')
         if game % 2 == 0:
             result = play_game(mcts, 1)
         else:
@@ -158,6 +160,7 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
             stockfish_rating += 200
         else:
             draws += 1
+        display.flip(game_board)
 
     rating = performance_rating(opponent_elos, new_model_wins+(0.5*draws)-stockfish_wins)
     print(f"Tako Wins: {new_model_wins}, Stockfish Wins: {stockfish_wins}, Draws: {draws}")
