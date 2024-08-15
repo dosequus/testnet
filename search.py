@@ -88,17 +88,24 @@ class MCTS:
             pi, val = nnet.predict_single(torch.from_numpy(self.state), _get_move_mask(game))
             pred_moves = nnet.pi_to_move_map(pi, game.valid_moves(), game.game.piece_map())
 
-            win_prob, draw_prob, loss_prob = val
+            curr_score = game.score()
+            if curr_score == 1:
+                val = torch.tensor([1., 0., 0.]).to(val.device)
+            elif curr_score == 0:
+                val = torch.tensor([0., 1., 0.]).to(val.device)
+            elif curr_score == -1:
+                val = torch.tensor([0., 0., 1.]).to(val.device)
 
-            # TODO this should probably depend on the player right?
-            if game.turn == 1:  # White's turn
+            win_prob, draw_prob, loss_prob = val.tolist()
+
+            if game.turn == -1:  # white just played a move
                 # Prioritize wins > draws > losses
                 self.action_val = win_prob + draw_prob / 2 - loss_prob
             else:  # Black's turn
                 self.action_val = loss_prob + draw_prob / 2 - win_prob
 
             # If this is a terminal state, memoize the result
-            if game.over():
+            if game.score():
                 memo[state_key] = self.action_val
 
             # Expand children
@@ -118,11 +125,10 @@ class MCTS:
                 
     def _simulate(self, game, max_depth, max_nodes):
         root = self.Node(None, game.state, self.explore_factor)
-        depth = 0
-        curr_node = root
-
         # Selection and Expansion phase
         while not game.over():
+            curr_node = root
+            depth = 0
             # SELECT
             while len(curr_node.children) > 0:
                 _, curr_node = curr_node.select()

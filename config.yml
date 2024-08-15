@@ -4,7 +4,7 @@ model:
     value_output_size: 3
 
 mcts:
-    max_nodes: 1000
+    max_nodes: 50
 
 training:
     num_epochs: 1000
@@ -24,3 +24,4 @@ evaluation:
     num_games: 10
 
 visualize: true
+verbose: false

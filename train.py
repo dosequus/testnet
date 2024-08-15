@@ -26,9 +26,11 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
     
     for epoch in range(starting_epoch, config.training.num_epochs):
         print(f"Epoch: {epoch+1}")
+        w,d,l = 0,0,0
         # self play
-        for _ in tqdm.trange(config.training.num_self_play_games):
-            game = ChessGame()
+        pbar = tqdm.trange(config.training.num_self_play_games, desc=f'+{w}={d}-{l}')
+        for _ in pbar:
+            game = ChessGame("2kN3r/pbp4p/1p4p1/5p2/nqB2P1P/1N3P2/P1P1QB2/K2R3R b - - 2 22")
             
             states = []
             policies = []
@@ -51,37 +53,31 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
                 
                 game.make_move(best_move)
             
+            if config.visualize: display.update(game.game.fen(), game_board)  
             result = game.score()
             # Create the target result tensor based on the outcome
             if result == 1:  # Win
                 if config.visualize: display.update(game.game.fen(), game_board)
-                print("white won")
+                if config.verbose: print("white won")
+                w += 1
                 target_result = torch.tensor([1.0, 0.0, 0.0])  # [win, draw, loss]
             elif result == 0:  # Draw
                 if game.game.is_fifty_moves():
-                    print("draw due to fifty moves without capture")
+                    if config.verbose: print("draw due to fifty moves without capture")
                 elif game.game.is_insufficient_material():
-                    print("draw due to insufficient material")
+                    if config.verbose: print("draw due to insufficient material")
                 elif game.game.is_fivefold_repetition():
-                    print("draw due to 5-fold-repetition")
-                    
+                    if config.verbose: print("draw due to 5-fold-repetition")
+                d += 1
                 target_result = torch.tensor([0.0, 1.0, 0.0])  
             else:  # Loss
                 if config.visualize: display.update(game.game.fen(), game_board)
-                print("black won")
+                if config.verbose: print("black won")
+                l += 1
                 target_result = torch.tensor([0.0, 0.0, 1.0]) 
-            
-            
+            pbar.set_description_str(f'+{w}={d}-{l}')
             for s, p, m in zip(states, policies, masks):
-                TURN_MASK = 6
-                # Check the TURN_MASK to determine if the current player is black
-                current_turn = s[0,0,TURN_MASK]  # Access the first element to determine the turn
-
-                if current_turn.item() == -1:  # If the current player is black
-                    # Reverse the target_result (swap win and loss probabilities)
-                    memory.append((s, p, m, target_result.flip(0)))
-                else:
-                    memory.append((s, p, m, target_result))
+                memory.append((s, p, m, target_result))
 
         for _ in tqdm.trange(config.training.training_steps):
             if len(memory) >= config.training.batch_size:
