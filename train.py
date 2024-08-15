@@ -31,7 +31,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
         # self play
         pbar = tqdm.trange(config.training.num_self_play_games, desc=f'+{w}={d}-{l}')
         for _ in pbar:
-            game = ChessGame("2kN3r/pbp4p/1p4p1/5p2/nqB2P1P/1N3P2/P1P1QB2/K2R3R b - - 2 22")
+            game = ChessGame()
             
             states = []
             policies = []
