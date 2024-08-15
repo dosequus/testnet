@@ -9,13 +9,13 @@ from games.games import AbstractGame
 import torch
 
 
-pieces = ["P", "K", "B", "R", "Q", "N"]
+pieces = ["P", "N", "B", "R", "Q", "K"]
 
 
 
 class ChessGame(AbstractGame):
 
-    def __init__(self, fen=chess.Board().fen()):
+    def __init__(self, fen=chess.STARTING_FEN):
         super().__init__()
         self.game = chess.Board(fen)
         self.ply = self.game.ply()
@@ -71,11 +71,13 @@ class ChessGame(AbstractGame):
         H, W = 8,8
         
         state = np.zeros((H, W, len(pieces)+6), dtype=np.float32)
-        for i, j in product(range(W), range(H)):
-            piece = self.game.piece_at(chess.square(i, j))
+        for square in range(64):
+            i = chess.square_file(square)
+            j = chess.square_rank(square)
+            piece = self.game.piece_at(square)
             if piece:
                 # White pieces are +1, black pieces are -1
-                state[i, j, pieces.index(piece.symbol().upper())] = +1 if piece.symbol().isupper() else -1
+                state[i, j, piece.piece_type - 1] = +1 if piece.color else -1
 
         KW, KB = self.game.has_kingside_castling_rights(chess.WHITE), self.game.has_kingside_castling_rights(chess.BLACK)
         QW, QB = self.game.has_queenside_castling_rights(chess.WHITE), self.game.has_queenside_castling_rights(chess.BLACK)
@@ -91,13 +93,14 @@ class ChessGame(AbstractGame):
     @classmethod
     def load(cls, state : np.ndarray):
         piece_map = {} # piece letter => k value
-        H, W = 8,8
-        for k in range(len(pieces)):
-            for i, j in product(range(H), range(W)):
-                if state[i, j, k] == 1:
-                    piece_map[chess.square(i,j)] = chess.Piece.from_symbol(pieces[k])
-                if state[i, j, k] == -1:
-                    piece_map[chess.square(i,j)] = chess.Piece.from_symbol(pieces[k].lower())    
+        for square in range(64):
+            i = chess.square_file(square)
+            j = chess.square_rank(square)
+            for k in range(len(pieces)):
+                piece_at = state[i, j, k]
+                if piece_at != 0:
+                    piece_map[square] = chess.Piece(k+1, piece_at == 1)
+                       
         game = ChessGame()
         game.game.set_piece_map(piece_map)
         
