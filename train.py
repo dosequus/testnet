@@ -17,6 +17,7 @@ from chessboard import display
 config = Configuration().get_config()
 
 def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', starting_epoch=0):
+    game_board = None
     if config.visualize: game_board = display.start()
     
     memory = deque(maxlen=config.training.replay_buffer_size)
@@ -111,7 +112,7 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
                 
                     
         if (epoch+1) % config.training.evaluation_interval == 0:  # Evaluate every 10 iterations
-            evaluate.stockfish_benchmark(mcts, device=device)
+            evaluate.stockfish_benchmark(mcts, device=device, game_board=game_board)
             # Save the model
             stamp = str(int(time.time()))
             torch.save({
