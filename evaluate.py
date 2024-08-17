@@ -118,19 +118,19 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
         game = ChessGame()
-        if game_board: display.update(game.game.fen(), game_board)
+        if game_board: display.update(game.board.fen(), game_board)
         stockfish = Stockfish(depth=max_depth) # keep stockfish at the same depth
         stockfish.set_elo_rating(stockfish_rating)
         while not game.over():
             if game.turn == color:  # model1 plays as white
                 _, best_move = mcts.run(game.copy(), max_depth=max_depth, num_sim=num_sim)
             else:  
-                stockfish.set_fen_position(game.game.fen())
+                stockfish.set_fen_position(game.board.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())
             
             game.make_move(best_move)
-            if game_board: display.update(game.game.fen(), game_board)
-        if game_board: display.update(game.game.fen(), game_board)
+            if game_board: display.update(game.board.fen(), game_board)
+        if game_board: display.update(game.board.fen(), game_board)
         result = game.score()
         return result  # 1 if model1 wins, 0 if draw, -1 if model2 wins
 
@@ -160,7 +160,7 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
             stockfish_rating += 200
         else:
             draws += 1
-        display.flip(game_board)
+        if game_board: display.flip(game_board)
 
     rating = performance_rating(opponent_elos, new_model_wins+(0.5*draws)-stockfish_wins)
     print(f"Tako Wins: {new_model_wins}, Stockfish Wins: {stockfish_wins}, Draws: {draws}")

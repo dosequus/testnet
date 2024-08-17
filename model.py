@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import chess
-from chess import Move, Piece, PieceType, Square
 from vit_pytorch import ViT
 import numpy as np
 
@@ -92,94 +90,6 @@ class TransformerNet(nn.Module):
     def predict_single(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             return self.forward_single(x.to(self.device), mask.to(self.device))
-
-    @staticmethod
-    def get_legal_move_mask(moves: "list[Move]", piece_map: "dict[Square, Piece]", device='cpu') -> torch.TensorType:
-        # pi[i][j][k] = Pr(positions[i][j] * t(k) | state)
-        KNIGHT_MOVES = [(2, 1), (1, 2), (-1, 2), (-2, 1),
-                        (-2, -1), (-1, -2), (1, -2), (2, -1)]
-        # QUEEN_MOVES = [N,NE,E,SE,S,SW,W,NW]
-        QUEEN_MOVES = [(0, 1), (1, 1), (1, 0), (-1, 1),
-                       (0, -1), (-1, -1), (-1, 0), (1, -1)]
-
-        UNDERPROMOTIONS = (chess.KNIGHT, chess.BISHOP, chess.ROOK)
-        
-        KNIGHT_PLANE = 56
-        UNDERPROMOTE_PLANE = KNIGHT_PLANE+8
-
-        mask = torch.zeros(8, 8, 73, device=device)  # moves are illegal to start
-        for move in moves:
-            from_i, to_i = chess.square_file(
-                move.from_square), chess.square_file(move.to_square)
-            from_j, to_j = chess.square_rank(
-                move.from_square), chess.square_rank(move.to_square)
-            
-            piece_type = piece_map[move.from_square].piece_type
-
-            if move.promotion is not None and move.promotion != chess.QUEEN:  # "underpromotions
-                RIGHT = int(to_i > to_j)
-                mask[from_i][from_j][UNDERPROMOTE_PLANE+UNDERPROMOTIONS.index(
-                    move.promotion)+RIGHT] = 1
-
-            if piece_type == chess.KNIGHT:  # knight moves
-                di = to_i - from_i
-                dj = to_j - from_j
-
-                mask[from_i][from_j][56+KNIGHT_MOVES.index((di, dj))] = 1
-            if piece_type in (chess.ROOK, chess.BISHOP, chess.QUEEN, ):
-                di = to_i - from_i
-                dj = to_j - from_j
-                
-                di = di//abs(di) if abs(di) > 0 else 0
-                dj = dj//abs(dj) if abs(dj) > 0 else 0
-
-                if (di, dj) in QUEEN_MOVES:
-                    distance = max(abs(to_i - from_i), abs(to_j - from_j))
-                    direction_index = QUEEN_MOVES.index((di, dj))
-                    plane_index = direction_index * 7 + (distance - 1)
-                    mask[from_i][from_j][plane_index] = 1
-                else:
-                    print("ruh roh: ", (di, dj))
-                    exit(1)
-        return mask
-    
-    @staticmethod
-    def pi_to_move_map(pi: torch.Tensor, moves: "list[Move]", piece_map: "dict[Square, Piece]") -> "dict[Move, int]":
-        KNIGHT_MOVES = [(2, 1), (1, 2), (-1, 2), (-2, 1),
-                        (-2, -1), (-1, -2), (1, -2), (2, -1)]
-        # QUEEN_MOVES = [N,NE,E,SE,S,SW,W,NW]
-        QUEEN_MOVES = [(0, 1), (1, 1), (1, 0), (-1, 1),
-                       (0, -1), (-1, -1), (-1, 0), (1, -1)]
-
-        UNDERPROMOTIONS = (chess.KNIGHT, chess.BISHOP, chess.ROOK)
-        move_mapping = {}
-        for move in moves:
-            from_i, to_i = chess.square_file(
-                move.from_square), chess.square_file(move.to_square)
-            from_j, to_j = chess.square_rank(
-                move.from_square), chess.square_rank(move.to_square)
-
-            if move.promotion is not None and move.promotion != chess.QUEEN:  # "underpromotions
-                RIGHT = int(to_i > to_j)
-                move_mapping[move] = pi[from_i][from_j][UNDERPROMOTIONS.index(
-                    move.promotion)+RIGHT].item()
-
-            if piece_map[move.from_square].piece_type == chess.KNIGHT:  # knight moves
-                di = to_i - from_i
-                dj = to_j - from_j
-
-                move_mapping[move] = pi[from_i][from_j][56 +
-                                                        KNIGHT_MOVES.index((di, dj))].item()
-            if piece_map[move.from_square].piece_type in (chess.PAWN, chess.KING, chess.ROOK, chess.BISHOP, chess.QUEEN):
-                di = to_i - from_i
-                dj = to_j - from_j
-
-                di = di//abs(di) if abs(di) > 0 else 0
-                dj = dj//abs(dj) if abs(dj) > 0 else 0
-
-                move_mapping[move] = pi[from_i][from_j][QUEEN_MOVES.index(
-                    (di, dj))*7+chess.square_distance(move.from_square, move.to_square)-1].item()
-        return move_mapping
 
     def save_model(self, filepath='checkpoints/best_model'):
         torch.save({}, filepath)

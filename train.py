@@ -38,9 +38,9 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
             masks = []
             
             while not game.over():
-                if config.visualize: display.update(game.game.fen(), game_board)
+                if config.visualize: display.update(game.board.fen(), game_board)
 
-                root, best_move = mcts.run(game.copy(), 
+                root, best_move = mcts.run(game, 
                                            max_depth=config.training.max_depth, 
                                            num_sim=config.training.num_simulations, 
                                            max_nodes=config.mcts.max_nodes)
@@ -48,31 +48,31 @@ def train(model: TransformerNet, optimizer: optim.Optimizer, device='cpu', start
                 total_visits = 1+sum(child.visit_count for child in root.children.values())
                 policy_map = { move : torch.tensor(node.visit_count/total_visits) for move, node in root.children.items() }
                 
-                states.append(torch.tensor(game.state, dtype=torch.float32))
+                states.append(game.to_tensor())
                 policies.append(game.pi_to_policy(policy_map).reshape(config.model.policy_output_size))
-                masks.append(TransformerNet.get_legal_move_mask(policy_map.keys(), game.game.piece_map()))
+                masks.append(game.get_legal_move_mask())
                 
                 game.make_move(best_move)
             
-            if config.visualize: display.update(game.game.fen(), game_board)  
+            if config.visualize: display.update(game.board.fen(), game_board)  
             result = game.score()
             # Create the target result tensor based on the outcome
             if result == 1:  # Win
-                if config.visualize: display.update(game.game.fen(), game_board)
+                if config.visualize: display.update(game.board.fen(), game_board)
                 if config.verbose: print("white won")
                 w += 1
                 target_result = torch.tensor([1.0, 0.0, 0.0])  # [win, draw, loss]
             elif result == 0:  # Draw
-                if game.game.is_fifty_moves():
+                if game.board.is_fifty_moves():
                     if config.verbose: print("draw due to fifty moves without capture")
-                elif game.game.is_insufficient_material():
+                elif game.board.is_insufficient_material():
                     if config.verbose: print("draw due to insufficient material")
-                elif game.game.is_fivefold_repetition():
+                elif game.board.is_fivefold_repetition():
                     if config.verbose: print("draw due to 5-fold-repetition")
                 d += 1
                 target_result = torch.tensor([0.0, 1.0, 0.0])  
             else:  # Loss
-                if config.visualize: display.update(game.game.fen(), game_board)
+                if config.visualize: display.update(game.board.fen(), game_board)
                 if config.verbose: print("black won")
                 l += 1
                 target_result = torch.tensor([0.0, 0.0, 1.0]) 
@@ -133,7 +133,7 @@ if __name__ == '__main__':
         device = torch.device('cpu') 
     print(device.type)
     
-    model = TransformerNet(device=device)
+    model = TransformerNet()
     optimizer = optim.Adam(model.parameters(), lr=config.model.learning_rate)
     checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
     epoch = 0
@@ -147,5 +147,6 @@ if __name__ == '__main__':
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
     
+    print(config)
     
-    train(model, optimizer, device, epoch)
+    train(model, optimizer, starting_epoch=epoch)

@@ -10,22 +10,17 @@ from collections import defaultdict
 from chess import Move
 from games.chessboard import ChessGame
 from model import TransformerNet
-
+import time
 
 logger = logging.getLogger(__name__)
-
-
-def _get_move_mask(game: ChessGame) -> torch.Tensor:
-    moves = game.valid_moves()
-    pieces = game.game.piece_map()
-    return TransformerNet.get_legal_move_mask(moves, pieces)
-
 
 class MCTS:
     def __init__(self, nnet: TransformerNet, explore_factor=np.sqrt(2)):
         self.nnet = nnet
         self.memo = {}
         self.explore_factor = explore_factor
+        
+        self.nnet.share_memory()
 
     class Node:
         def __init__(self, parent, state, temperature, prior_prob=0):
@@ -76,17 +71,19 @@ class MCTS:
             return MCTS.Node(self, new_state, self.temperature*.70, prior_prob=val)
 
         def expand(self, nnet: TransformerNet, memo):
+            
             game = ChessGame.load(self.state)
 
             # Check if the current state has already been evaluated and is in memo
-            state_key = game.game.fen()  # Use FEN (Forsyth-Edwards Notation) as a unique identifier
+            state_key = game.board.fen()  # Use FEN (Forsyth-Edwards Notation) as a unique identifier
             if state_key in memo:
                 self.action_val = memo[state_key]
                 return
 
             # Get model predictions
-            pi, val = nnet.predict_single(torch.from_numpy(self.state), _get_move_mask(game))
-            pred_moves = nnet.pi_to_move_map(pi, game.valid_moves(), game.game.piece_map())
+            pi, val = nnet.predict_single(game.to_tensor(), game.get_legal_move_mask())
+            # pi, val = (torch.rand(8, 8, 73), torch.rand(3))
+            pred_moves = game.pi_to_move_map(pi)
 
             curr_score = game.score()
             if curr_score == 1:
@@ -122,7 +119,7 @@ class MCTS:
         def update_pi(self, pi, sim):
             for move, child in self.children.items():
                 pi[move] = pi[move] - (pi[move] - child.action_val) / sim
-                
+    
     def _simulate(self, game, max_depth, max_nodes):
         root = self.Node(None, game.state, self.explore_factor)
         # Selection and Expansion phase

@@ -1,13 +1,23 @@
 import torch
-
+import cProfile, pstats
+import numpy as np
 
 from games.chessboard import ChessGame
 from model import TransformerNet
+import search
+import multiprocessing
 
+if __name__ == '__main__':
+    test = ChessGame(fen=None)
+    test.copy()
+    # print(test.state, test.copy().state)
+    assert np.array_equal(test.state, test.copy().state)
+    # exit()
+    game = ChessGame()
+    nnet = TransformerNet()
+    mcts = search.MCTS(nnet)
 
-game = ChessGame("6k1/5p2/6p1/8/7p/8/6PP/6K1 b - - 0 0")
-x = torch.from_numpy(game.state)
-moves = game.valid_moves()
-model = TransformerNet()
-pi, v = model.predict(x, TransformerNet.get_legal_move_mask(moves, game.game.piece_map()))
-pi_star = TransformerNet.pi_to_move_map(pi, moves, game.game.piece_map())
+    with cProfile.Profile(builtins=False) as pr:
+        mcts.run(game, num_sim=1, max_nodes=80)
+    ps = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
+    ps.print_stats(20)

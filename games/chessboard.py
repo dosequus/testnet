@@ -4,6 +4,9 @@ from copy import deepcopy
 from itertools import product
 import numpy as np
 import chess
+from chess import Move, Piece, PieceType, Square
+
+from functools import cache
 
 from games.games import AbstractGame
 import torch
@@ -17,70 +20,71 @@ class ChessGame(AbstractGame):
 
     def __init__(self, fen=chess.STARTING_FEN):
         super().__init__()
-        self.game = chess.Board(fen)
-        self.ply = self.game.ply()
-
+        self.board = chess.Board(fen)
+        
+    @property
+    def ply(self):
+        return self.board.ply()
+    
     @property
     def turn(self):
-        return 1 if self.game.turn else -1 # 1 if white -1 if black
+        return 1 if self.board.turn else -1 # 1 if white -1 if black
+    
+    @property
+    def state(self):
+        return self.board
 
     def score(self):
-        if self.game.can_claim_draw() or self.game.is_stalemate():
+        if self.board.can_claim_draw() or self.board.is_stalemate():
             return 0
-        if not self.game.is_game_over():
+        if not self.board.is_game_over():
             return None
-        if self.game.outcome().winner is None:
+        if self.board.outcome().winner is None:
             return 0
-        if self.game.outcome().winner:
+        if self.board.outcome().winner:
             return 1 
         return -1
 
-    @staticmethod
-    def state_score(state):
-        g = ChessGame.load(state)
-        score = g.score()
-        if score is None: return None
-        if score == 0: return 0
-        return 1 if score == g.turn else -1
-
     def valid_moves(self):
-        return list(self.game.legal_moves)
+        return list(self.board.legal_moves)
 
     def over(self):
-        return self.game.is_game_over()
+        return self.board.is_game_over()
 
     def make_move(self, move):
-        self.game.push(move)
+        self.board.push(move)
 
     def undo_move(self):
-        self.game.pop()
+        self.board.pop()
         
     @classmethod
-    def next_state(self, state, move):
-        g = ChessGame.load(state)
-        # print(g.game.fen())
-        
-        g.make_move(move)
-        # print("New state: ", g.game.fen())
-        if(g.state is None):
-            print(state, self.game.fen(), g.fen())
-        return g.state
+    def next_state(cls, state : chess.Board, move: Move):
+        next_state = state.copy(stack=False)
+        next_state.push(move)
+        return next_state
+    
+    @classmethod
+    def load(cls, state):
+        game = cls()
+        game.board = state
+        return game
 
-    @property
-    def state(self):
+    # @cache()
+    def to_numpy(self):
         H, W = 8,8
         
         state = np.zeros((H, W, len(pieces)+6), dtype=np.float32)
+        
         for square in range(64):
             i = chess.square_file(square)
             j = chess.square_rank(square)
-            piece = self.game.piece_at(square)
+            piece = self.board.piece_at(square)
             if piece:
                 # White pieces are +1, black pieces are -1
                 state[i, j, piece.piece_type - 1] = +1 if piece.color else -1
 
-        KW, KB = self.game.has_kingside_castling_rights(chess.WHITE), self.game.has_kingside_castling_rights(chess.BLACK)
-        QW, QB = self.game.has_queenside_castling_rights(chess.WHITE), self.game.has_queenside_castling_rights(chess.BLACK)
+        KW, KB = self.board.has_kingside_castling_rights(chess.WHITE), self.board.has_kingside_castling_rights(chess.BLACK)
+        QW, QB = self.board.has_queenside_castling_rights(chess.WHITE), self.board.has_queenside_castling_rights(chess.BLACK)
         state[:, :, len(pieces)].fill(self.turn)
         state[:, :, len(pieces)+1].fill(self.ply)
         state[:, :, len(pieces)+2].fill(1 if KW else 0)
@@ -89,30 +93,32 @@ class ChessGame(AbstractGame):
         state[:, :, len(pieces)+5].fill(1 if QB else 0)
 
         return state
+    
+    def to_tensor(self, device='cpu'):
+        return torch.from_numpy(self.to_numpy()).to(device)
 
     @classmethod
-    def load(cls, state : np.ndarray):
-        piece_map = {} # piece letter => k value
-        for square in range(64):
-            i = chess.square_file(square)
-            j = chess.square_rank(square)
-            for k in range(len(pieces)):
-                piece_at = state[i, j, k]
-                if piece_at != 0:
-                    piece_map[square] = chess.Piece(k+1, piece_at == 1)
-                       
-        game = ChessGame()
-        game.game.set_piece_map(piece_map)
+    def from_numpy(cls, state : np.ndarray):
+        # piece_map = {} # piece letter => k value
         
-        game.game.turn = 1 if state[0,0, len(pieces)] > 0 else 0
-        game.game.fullmove_number = int((state[0,0,len(pieces)+1] + 1) // 2)
-        game.ply = state[0,0,len(pieces)+1] + int(not(bool(game.game.turn)))
+                       
+        game = cls(fen=None)
+        indices = np.argwhere(state[:,:,:len(pieces)] != 0)
+        for i, j, k in indices:
+            square = chess.square(i, j)
+            game.board.set_piece_at(square, chess.Piece(k+1, state[i,j,k] == 1))
+        # game.board.set_piece_map(piece_map)
+        
+        game.board.turn = state[0, 0, len(pieces)] > 0
+        game.ply = int(state[0, 0, len(pieces) + 1])
+        game.board.fullmove_number = (game.ply // 2) + 1
+        
         castling = ""
         if state[0,0,len(pieces)+2]: castling += 'K'
         if state[0,0,len(pieces)+3]: castling += 'Q'
         if state[0,0,len(pieces)+4]: castling += 'k'
         if state[0,0,len(pieces)+5]: castling += 'q'
-        game.game.set_castling_fen(castling)
+        game.board.set_castling_fen(castling)
 
         return game
                     
@@ -121,13 +127,101 @@ class ChessGame(AbstractGame):
 
 
     def __str__(self):
-        return str(self.game)
+        return str(self.board)
 
     def __repr__(self):
-        return repr(self.game)
+        return repr(self.board)
+    
+    
+    def get_legal_move_mask(self, device='cpu') -> torch.TensorType:
+        # pi[i][j][k] = Pr(positions[i][j] * t(k) | state)
+        KNIGHT_MOVES = [(2, 1), (1, 2), (-1, 2), (-2, 1),
+                        (-2, -1), (-1, -2), (1, -2), (2, -1)]
+        # QUEEN_MOVES = [N,NE,E,SE,S,SW,W,NW]
+        QUEEN_MOVES = [(0, 1), (1, 1), (1, 0), (-1, 1),
+                       (0, -1), (-1, -1), (-1, 0), (1, -1)]
+
+        UNDERPROMOTIONS = (chess.KNIGHT, chess.BISHOP, chess.ROOK)
+        
+        KNIGHT_PLANE = 56
+        UNDERPROMOTE_PLANE = KNIGHT_PLANE+8
+
+        mask = torch.zeros(8, 8, 73, device=device)  # moves are illegal to start
+        for move in self.valid_moves():
+            from_i, to_i = chess.square_file(
+                move.from_square), chess.square_file(move.to_square)
+            from_j, to_j = chess.square_rank(
+                move.from_square), chess.square_rank(move.to_square)
+            
+            piece_type = self.board.piece_type_at(move.from_square)
+
+            if move.promotion is not None and move.promotion != chess.QUEEN:  # "underpromotions
+                RIGHT = int(to_i > to_j)
+                mask[from_i][from_j][UNDERPROMOTE_PLANE+UNDERPROMOTIONS.index(
+                    move.promotion)+RIGHT] = 1
+
+            if piece_type == chess.KNIGHT:  # knight moves
+                di = to_i - from_i
+                dj = to_j - from_j
+
+                mask[from_i][from_j][56+KNIGHT_MOVES.index((di, dj))] = 1
+            if piece_type in (chess.ROOK, chess.BISHOP, chess.QUEEN, ):
+                di = to_i - from_i
+                dj = to_j - from_j
+                
+                di = di//abs(di) if abs(di) > 0 else 0
+                dj = dj//abs(dj) if abs(dj) > 0 else 0
+
+                if (di, dj) in QUEEN_MOVES:
+                    distance = max(abs(to_i - from_i), abs(to_j - from_j))
+                    direction_index = QUEEN_MOVES.index((di, dj))
+                    plane_index = direction_index * 7 + (distance - 1)
+                    mask[from_i][from_j][plane_index] = 1
+                else:
+                    print("ruh roh: ", (di, dj))
+                    exit(1)
+        return mask
+    
+    def pi_to_move_map(self, pi: torch.Tensor) -> "dict[Move, int]":
+        KNIGHT_MOVES = [(2, 1), (1, 2), (-1, 2), (-2, 1),
+                        (-2, -1), (-1, -2), (1, -2), (2, -1)]
+        # QUEEN_MOVES = [N,NE,E,SE,S,SW,W,NW]
+        QUEEN_MOVES = [(0, 1), (1, 1), (1, 0), (-1, 1),
+                       (0, -1), (-1, -1), (-1, 0), (1, -1)]
+
+        UNDERPROMOTIONS = (chess.KNIGHT, chess.BISHOP, chess.ROOK)
+        move_mapping = {}
+        for move in self.valid_moves():
+            from_i, to_i = chess.square_file(
+                move.from_square), chess.square_file(move.to_square)
+            from_j, to_j = chess.square_rank(
+                move.from_square), chess.square_rank(move.to_square)
+
+            if move.promotion is not None and move.promotion != chess.QUEEN:  # "underpromotions
+                RIGHT = int(to_i > to_j)
+                move_mapping[move] = pi[from_i][from_j][UNDERPROMOTIONS.index(
+                    move.promotion)+RIGHT].item()
+
+            piece_type = self.board.piece_type_at(move.from_square)
+            
+            if piece_type == chess.KNIGHT:  # knight moves
+                di = to_i - from_i
+                dj = to_j - from_j
+
+                move_mapping[move] = pi[from_i][from_j][56 +
+                                                        KNIGHT_MOVES.index((di, dj))].item()
+            if piece_type in (chess.PAWN, chess.KING, chess.ROOK, chess.BISHOP, chess.QUEEN):
+                di = to_i - from_i
+                dj = to_j - from_j
+
+                di = di//abs(di) if abs(di) > 0 else 0
+                dj = dj//abs(dj) if abs(dj) > 0 else 0
+
+                move_mapping[move] = pi[from_i][from_j][QUEEN_MOVES.index(
+                    (di, dj))*7+chess.square_distance(move.from_square, move.to_square)-1].item()
+        return move_mapping
     
     def pi_to_policy(self, policy: dict[chess.Move, torch.Tensor]):
-        piece_map = self.game.piece_map()
         
         # pi[i][j][k] = Pr(positions[i][j] * t(k) | state)
         KNIGHT_MOVES = [(2, 1), (1, 2), (-1, 2), (-2, 1),
@@ -148,7 +242,7 @@ class ChessGame(AbstractGame):
             from_j, to_j = chess.square_rank(
                 move.from_square), chess.square_rank(move.to_square)
             
-            piece_type = piece_map[move.from_square].piece_type
+            piece_type = self.board.piece_type_at(move.from_square)
 
             if move.promotion is not None and move.promotion != chess.QUEEN:  # "underpromotions
                 RIGHT = int(to_i > to_j)
