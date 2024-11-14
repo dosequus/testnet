@@ -6,11 +6,10 @@ from model import TransformerNet
 from chess import Move
 import torch.optim as optim
 import search
-import random
+import os
 from settings import Configuration
 import tqdm
 from stockfish import Stockfish
-from collections import deque
 from chessboard import display
 
 config = Configuration().get_config()
@@ -89,6 +88,7 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     stockfish_rating = 100
     max_depth=config.evaluation.max_depth
     num_sim=config.evaluation.num_simulations
+    game_board = None if not config.visualize else display.start()
     
     def expected_score(opponent_ratings: list[float], own_rating: float) -> float:
         """How many points we expect to score in a tourney with these opponents"""
@@ -165,3 +165,31 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     rating = performance_rating(opponent_elos, new_model_wins+(0.5*draws)-stockfish_wins)
     print(f"Tako Wins: {new_model_wins}, Stockfish Wins: {stockfish_wins}, Draws: {draws}")
     print(f"estimated elo: {rating}")
+
+if __name__ == '__main__':
+    # Determine the device to use: CUDA > MPS > CPU
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu') 
+    print(device.type)
+    
+    model = TransformerNet()
+    optimizer = optim.Adam(model.parameters(), lr=config.model.learning_rate)
+    checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
+    epoch = 0
+    if os.path.isfile(checkpoint_path):
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=model.device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        print("Checkpoint loaded successfully.")
+    else:
+        print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
+    
+    print(config)
+    
+    stockfish_benchmark(search.MCTS(model, explore_factor=0), device=device.type)

@@ -33,9 +33,13 @@ class ChessGame(AbstractGame):
     @property
     def state(self):
         return self.board
+    
+    @property
+    def move_count(self):
+        return self.board.fullmove_number
 
     def score(self):
-        if self.board.can_claim_draw() or self.board.is_stalemate():
+        if self.board.is_stalemate():
             return 0
         if not self.board.is_game_over():
             return None

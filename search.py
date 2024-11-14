@@ -67,8 +67,11 @@ class MCTS:
             return best_move, best_child
 
         def create_child(self, move, val):
-            new_state = ChessGame.next_state(self.state, move)
-            return MCTS.Node(self, new_state, self.temperature*.70, prior_prob=val)
+            try: 
+                new_state = ChessGame.next_state(self.state, move)
+                return MCTS.Node(self, new_state, self.temperature*.70, prior_prob=val)
+            except:
+                return None
 
         def expand(self, nnet: TransformerNet, memo):
             
@@ -101,12 +104,13 @@ class MCTS:
             else:  # Black's turn
                 self.action_val = loss_prob + draw_prob / 2 - win_prob
 
-            # If this is a terminal state, memoize the result
+            # If this is a terminal state, memoize the result 
             if game.score():
-                memo[state_key] = self.action_val
+                memo[state_key] = self.action_val * 100
 
             # Expand children
             self.children = {move: self.create_child(move, eval) for move, eval in pred_moves.items()}
+            self.children = dict(filter(lambda x:x[1], self.children.items()))
 
         def backup(self):
             if self.parent:
@@ -121,7 +125,8 @@ class MCTS:
                 pi[move] = pi[move] - (pi[move] - child.action_val) / sim
     
     def _simulate(self, game, max_depth, max_nodes):
-        root = self.Node(None, game.state, self.explore_factor)
+        temperature = self.explore_factor * (0.70**game.move_count)
+        root = self.Node(None, game.state, temperature)
         # Selection and Expansion phase
         while not game.over():
             curr_node = root

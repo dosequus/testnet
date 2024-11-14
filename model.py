@@ -75,7 +75,7 @@ class TransformerNet(nn.Module):
 
         # Apply the mask
         pi = pi * mask.to(self.device)
-        pi = F.softmax(pi, dim=-1)
+        # pi = F.softmax(pi, dim=-1)
         return pi, v
 
     def forward_single(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:

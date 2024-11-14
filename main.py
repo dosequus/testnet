@@ -18,6 +18,6 @@ if __name__ == '__main__':
     mcts = search.MCTS(nnet)
 
     with cProfile.Profile(builtins=False) as pr:
-        mcts.run(game, num_sim=1, max_nodes=80)
+        mcts.run(game, num_sim=4, max_nodes=80)
     ps = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
     ps.print_stats(20)
