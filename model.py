@@ -1,43 +1,35 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from vit_pytorch import ViT
+from nnet import ViTEncoderOnly
+from vit_pytorch import SimpleViT
 import numpy as np
 
 class TransformerNet(nn.Module):
-    class PositionalEncoding(nn.Module):
-        def __init__(self, d_hidden, max_len=64, device='cpu') -> None:
-            super().__init__()
-            pe = torch.arange(max_len).unsqueeze(1).to(device)
-            self.register_buffer('pe', pe)
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            x = x + self.pe[:x.size(0)]
-            return x
-
     def __init__(self, device='cpu'):
         super().__init__()
         self.device = device
         
-        self.vit = ViT(
+        transformer_dim = 64
+        
+        self.vit = ViTEncoderOnly(
             image_size=8,
             patch_size=1,
-            num_classes=1024,
-            dim=256,
+            dim=transformer_dim,
             depth=2,
-            heads=1,
-            mlp_dim=256,
+            heads=2,
+            mlp_dim=2*transformer_dim,
             channels=12,
         ).float().to(self.device)
 
         self.value_head = nn.Sequential(
-            nn.Linear(16, 64),
+            nn.Linear(transformer_dim, 64),
             nn.GELU(),
             nn.Linear(64, 3),
         ).to(self.device)
         
         self.policy_head = nn.Sequential(
-            nn.Linear(16, 256),
+            nn.Linear(transformer_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 73),
         ).to(self.device)
@@ -58,12 +50,9 @@ class TransformerNet(nn.Module):
         batch_size = x.size(0)  # Get the batch size
 
         # Reshape x to fit the input shape expected by ViT
-        x = x.reshape(batch_size, 12, 8, 8).to(self.device)
         z = self.vit(x)  # ViT should now handle batch inputs correctly
-
         z = z.squeeze()  # Remove unnecessary dimensions
         z = z.reshape(batch_size, 8, 8, -1)  # Reshape to [batch_size, 8, 8, hidden_dim]
-
         # Forward pass through the value head
         v = self.value_head(z)
         v = v.reshape(batch_size, -1, 3).sum(dim=1)

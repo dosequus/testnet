@@ -99,7 +99,7 @@ class ChessGame(AbstractGame):
         return state
     
     def to_tensor(self, device='cpu'):
-        return torch.from_numpy(self.to_numpy()).to(device)
+        return torch.from_numpy(self.to_numpy()).permute(2, 0, 1).to(device)
 
     @classmethod
     def from_numpy(cls, state : np.ndarray):

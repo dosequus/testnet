@@ -3,14 +3,11 @@ import math
 import logging
 import numpy as np
 
-import concurrent.futures
-
 from collections import defaultdict
 
 from chess import Move
 from games.chessboard import ChessGame
 from model import TransformerNet
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +17,6 @@ class MCTS:
         self.memo = {}
         self.explore_factor = explore_factor
         
-        self.nnet.share_memory()
-
     class Node:
         def __init__(self, parent, state, temperature, prior_prob=0):
             self.parent = parent
@@ -149,20 +144,12 @@ class MCTS:
 
     def run(self, game: ChessGame, num_sim=10, max_depth=50, max_nodes=10) -> tuple[Node | None, Move]:
         pi = defaultdict(int)
-        roots = []
         
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(self._simulate, game.copy(), max_depth, max_nodes) for _ in range(num_sim)]
-            
-            for future in concurrent.futures.as_completed(futures):
-                root = future.result()
-                if root:
-                    roots.append(root)
-        
-        for sim, root in enumerate(roots):
+        for sim in range(num_sim):
+            root = self._simulate(game.copy(), max_depth, max_nodes)
             root.update_pi(pi, sim+1)
 
-        return roots[-1] if roots else None, max(pi, key=pi.get)
+        return root, max(pi, key=pi.get)
 
 # Example usage:
 # mcts = MCTS(model)

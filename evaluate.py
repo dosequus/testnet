@@ -147,21 +147,19 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     for game in pbar:
         # Alternate who plays as white/black
         pbar.set_description(f'+{new_model_wins}={draws}-{stockfish_wins}')
-        if game % 2 == 0:
-            result = play_game(mcts, 1)
-        else:
-            result = play_game(mcts, -1)
-            result = -result  # Invert the result because the perspective is switched
+        color = (-1)**game
+        result = play_game(mcts, color)
         opponent_elos.append(stockfish_rating)
-        if result == 1:
+        if result == color:
             new_model_wins += 1
-        elif result == -1:
+        elif result == -color:
             stockfish_wins += 1
             stockfish_rating += 200
         else:
             draws += 1
-        if game_board: display.flip(game_board)
-
+        if game_board: 
+            display.flip(game_board)
+    # if game_board: display.terminate()
     rating = performance_rating(opponent_elos, new_model_wins+(0.5*draws)-stockfish_wins)
     print(f"Tako Wins: {new_model_wins}, Stockfish Wins: {stockfish_wins}, Draws: {draws}")
     print(f"estimated elo: {rating}")
