@@ -171,7 +171,7 @@ if __name__ == '__main__':
     
     model = TakoNetConfig().create_model() # pass device to create_model for GPU
     
-    optimizer = optim.Adam(model.parameters(), lr=config.model.learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=config.model.learning_rate)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, verbose=True)
     checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
     epoch = 0

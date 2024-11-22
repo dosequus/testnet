@@ -4,12 +4,12 @@ model:
     value_output_size: 3
 
 mcts:
-    max_nodes: 300
+    max_nodes: 3600
     thinking_time: 500
 
 train:
     num_epochs: 10000
-    num_self_play_games: 25
+    num_self_play_games: 20
     num_simulations: 1
     max_depth: 15
     batch_size: 8
@@ -20,15 +20,16 @@ train:
     training_steps: 250
 
 evaluation:
-    num_simulations: 10
+    num_simulations: 5
     max_depth: 10
     num_games: 5
 pretrain:
-    batch_size: 64
-    num_epochs: 1000
-    validation_batch_size: 1024
+    batch_size: 32
+    num_epochs: 10000
+    validation_batch_size: 100
     validation_interval: 10
     evaluation_interval: 100
+    alpha: 0.7
 
 visualize: true
 verbose: false

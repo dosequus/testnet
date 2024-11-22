@@ -3,17 +3,20 @@ import torch.backends
 from games.chessboard import ChessGame
 from model import TransformerNet
 import torch.optim as optim
+import torch.nn as nn
 from settings import Configuration
 import tqdm
 import pandas as pd
 import os
 import zstandard as zstd
 import requests
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import evaluate
 from chess import Move
 from network import TakoNet, TakoNetConfig
 from tokenizer import tokenize
+from stockfish import Stockfish
+from sklearn.metrics import f1_score
 
 config = Configuration().get_config()
 
@@ -56,17 +59,17 @@ def preprocess_row(row):
 
         # State tensor
         state_tensor = game.to_tensor()
-
         # Policy tensor
         pi = {Move.from_uci(best_move): torch.tensor(1.0)}
         policy_tensor = game.create_sparse_policy(pi)
-
+        
+        #mask
+        mask = game.get_legal_move_mask()
         # Value tensor placeholder (replace with actual WDL if available)
-        turn = game.turn
-        wdl = [0.8, 0.1, 0.1] if turn == 1 else [0.1, 0.1, 0.8]  # Example values
+        wdl = [.6, .2, .2] if game.turn == 1 else [.2, .2, .6]
         value_tensor = torch.tensor(wdl, dtype=torch.float)
 
-        return state_tensor, policy_tensor, value_tensor
+        return state_tensor, mask, policy_tensor, value_tensor
 
 def preprocess_data(puzzles: pd.DataFrame, save_path: str = "puzzles/preprocessed_chess_puzzles.pt"):
     """
@@ -77,14 +80,22 @@ def preprocess_data(puzzles: pd.DataFrame, save_path: str = "puzzles/preprocesse
     Returns:
         None
     """
+    if os.path.isfile('puzzles/preprocessed_chess_puzzles.pt'):
+        print("Already pre-processed.")
+        return
     # Preprocess the dataset in parallel
-    with ProcessPoolExecutor() as executor:
-        results = list(executor.map(preprocess_row, [row for _, row in puzzles.iterrows()]))
-
+    results = []
+    with ProcessPoolExecutor() as executor, tqdm.tqdm(total=len(puzzles)) as pbar:
+        futures = list(executor.submit(preprocess_row, row) for _, row in puzzles.iterrows())
+        
+        for f in as_completed(futures):
+            pbar.update()
+            results.append(f.result())
     # Unpack results and save tensors
-    state_tensors, policy_tensors, value_tensors = zip(*results)
+    state_tensors, mask, policy_tensors, value_tensors = zip(*results)
     torch.save({
         "state_tensors": torch.stack(state_tensors),
+        "mask_tensors": torch.stack(mask),
         "policy_tensors": torch.stack(policy_tensors),
         "value_tensors": torch.stack(value_tensors),
     }, save_path)
@@ -106,6 +117,7 @@ def compile_batch(batch_size: int, preprocessed_path: str = "puzzles/preprocesse
     state_tensors = data["state_tensors"]
     policy_tensors = data["policy_tensors"]
     value_tensors = data["value_tensors"]
+    mask_tensors = data["mask_tensors"]
 
     # Sample random indices for the batch
     indices = torch.randperm(len(state_tensors))[:batch_size]
@@ -113,46 +125,76 @@ def compile_batch(batch_size: int, preprocessed_path: str = "puzzles/preprocesse
     # Return batched tensors
     return (
         state_tensors[indices],
+        mask_tensors[indices],
         policy_tensors[indices],
         value_tensors[indices],
     )
 
+def calculate_f1_score(logits, truth):
+    # Convert policy logits to predicted classes
+    predicted_classes = torch.argmax(logits, dim=1)
+    
+    # Convert true_policy to true classes (indices of one-hot vector)
+    true_classes = torch.argmax(truth, dim=1)
+    
+    # Compute F1 score
+    f1 = f1_score(true_classes.cpu().numpy(), predicted_classes.cpu().numpy(), average="macro")
+    
+    return f1
+
+def calculate_top_k_accuracy(logits, truth, k = 3):
+
+    torch.set_printoptions(profile='full')
+     # Convert truth to class indices if it's one-hot encoded
+    if truth.ndim > 1 and truth.size(1) > 1:
+        truth = torch.argmax(truth, dim=1)  # Shape: [batch_size]
+    # Get the indices of the top-k predictions
+    top_k_predictions = torch.topk(logits, k=k, dim=1).indices  # Shape: [batch_size, k]
+
+    # Check if the true class is in the top-k predictions
+    correct = (top_k_predictions == truth.unsqueeze(1))  # Shape: [batch_size, k]
+    # Compute the Top-k Accuracy
+    top_k_accuracy = correct.any(dim=1).float().mean().item()  # Average across the batch
+
+    return top_k_accuracy
 
 def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0):    
-    PUZZLE_THRESHOLD = 1500
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
     puzzle_dataset = pd.read_csv(csv_path, nrows=100_000, usecols=['FEN', 'Moves', 'Rating'])
-    puzzle_dataset = puzzle_dataset[puzzle_dataset['Rating'] < PUZZLE_THRESHOLD]
     NUM_PUZZLES = len(puzzle_dataset)
-    
     print(f"Preprocessing {NUM_PUZZLES:,} rows...")
     preprocess_data(puzzle_dataset)
-    print("Starting pre-training on...")
+    print("Starting pre-training...")
+    alpha = config.pretrain.alpha
     pbar = tqdm.tqdm(total=config.pretrain.num_epochs)
     for epoch in range(starting_epoch, config.pretrain.num_epochs):           
         batch = compile_batch(config.pretrain.batch_size, device=model.device)
-        if batch:
-            state_tensor, true_policy, true_value = batch
-            # Forward pass
-            policy_logits, value_logits = model(state_tensor)
-            # Compute loss
-            # value_loss = nn.CrossEntropyLoss()(value_logits, true_value)
-            policy_loss = model.policy_loss(policy_logits, true_policy)
-            total_loss = policy_loss
-            # with open("logs/pretraining/value.csv", 'a+') as logfile:
-            #     logfile.write(f"{epoch},{value_loss.item()}\n")
-            
-            # Backpropagation and optimization
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-            pbar.update()
+
+        state_tensor, mask, true_policy, true_value = batch
+
+        # Forward pass
+        policy_logits, value_logits = model(state_tensor)
+        # Compute loss
+        value_loss = nn.CrossEntropyLoss()(value_logits, true_value)
+        policy_loss = nn.CrossEntropyLoss()(policy_logits + mask.log(), true_policy)
+        total_loss = (1 - alpha) * value_loss + alpha * policy_loss
+        # with open("logs/pretraining/value.csv", 'a+') as logfile:
+        #     logfile.write(f"{epoch},{value_loss.item()}\n")
+        
+        # Backpropagation and optimization
+        optimizer.zero_grad()
+        total_loss.backward()
+        optimizer.step()
+        pbar.update()
+        f1 = calculate_f1_score(policy_logits+mask.log(), true_policy)
         
         with open("logs/pretraining/policy.csv", 'a+') as logfile:
-                    logfile.write(f"{epoch},{policy_loss.item()}\n")
+                logfile.write(f"{epoch},{policy_loss.item()}\n")
+        with open("logs/pretraining/value.csv", 'a+') as logfile:
+                logfile.write(f"{epoch},{value_loss.item()}\n")
         scheduler.step()
-        pbar.set_description_str(f"loss={total_loss.item():.3f}, lr={scheduler.get_last_lr()[0]:.4f}")
+        pbar.set_description_str(f"loss={total_loss.item():.3f}, F1={f1:.4g}")
         
         if (epoch+1) % config.pretrain.evaluation_interval == 0:
             model.eval()
@@ -166,7 +208,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
                 policy_logits, value_logits = model.predict_single(game.to_tensor())
                 
                 # value_probs = value_logits.softmax(-1)
-                policy_probs = (policy_logits + game.get_legal_move_mask()).softmax(-1)
+                policy_probs = (policy_logits + game.get_legal_move_mask().log()).softmax(-1)
 
                 pred_moves = game.create_move_map(policy_probs)
                 if max(pred_moves, key=pred_moves.get).uci() == best_move_uci:
@@ -179,7 +221,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'policy_loss': total_loss,
-            }, f'checkpoints/best-pretrained-model.pt') 
+            }, f'checkpoints/best-pretrained-model.pt')
             
             model.train()
 
@@ -194,7 +236,7 @@ if __name__ == '__main__':
     
     model = TakoNetConfig().create_model() # pass device to create_model for GPU
     print(f"{model.count_params():,} params")
-    optimizer = optim.Adam(model.parameters(), lr=0.2)
+    optimizer = optim.AdamW(model.parameters(), lr=0.001)
     checkpoint_path = "checkpoints/best-pretrained-model.pt" # TODO: configure with command line args
     epoch = 0
     if os.path.isfile(checkpoint_path):
@@ -206,7 +248,12 @@ if __name__ == '__main__':
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
     
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2)
     print(config)
     download_training_set()
     train(model, optimizer, scheduler, starting_epoch=0)
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'epoch': 0
+    }, f'checkpoints/best-model.pt') 

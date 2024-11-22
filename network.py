@@ -11,12 +11,12 @@ from tokenizer import NUM_ACTIONS
 class TakoNetConfig:
     vocab_size: int = 32              # Number of unique FEN tokens
     seq_len: int = 77                 # Fixed length of FEN token sequence
-    d_model: int = 64                 # Dimensionality of token embeddings and model layers
-    num_heads: int = 8                # Number of attention heads in the transformer
-    num_layers: int = 6               # Number of transformer encoder layers
+    d_model: int = 128                # Dimensionality of token embeddings and model layers
+    num_heads: int = 8               # Number of attention heads in the transformer
+    num_layers: int = 15              # Number of transformer encoder layers
     policy_dim: int = NUM_ACTIONS     # Dimensionality of policy head output
     value_dim: int = 3                # Dimensionality of value head output
-    dropout: Optional[float] = 0.1    # Dropout rate for transformer layers
+    dropout: Optional[float] = 0    # Dropout rate for transformer layers
 
     def create_model(self, device = 'cpu'):
         """
@@ -43,19 +43,19 @@ class TakoNet(nn.Module):
         super(TakoNet, self).__init__()
         self.device = device
         self.embedding = nn.Embedding(vocab_size, d_model, device=device)  # Token embedding
-        self.positional_encoding = nn.Parameter(torch.zeros(seq_len, d_model, device=device))  # Learnable positional encoding
+        self.positional_encoding = nn.Embedding(seq_len, d_model)  # Learnable positional encoding
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model, num_heads, dropout=dropout),
             num_layers
         ).to(device)
         self.policy_head = nn.Sequential(
             nn.Linear(seq_len * d_model, d_model),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(d_model, policy_dim)
         ).to(device)
         self.value_head = nn.Sequential(
             nn.Linear(seq_len * d_model, d_model),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(d_model, value_dim)
         ).to(device)
         
@@ -63,8 +63,15 @@ class TakoNet(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-                    
+                    nn.init.constant_(module.bias, 0.01)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, mean=0, std=0.01)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.TransformerEncoderLayer):
+                for submodule in module.children():
+                    init_weights(submodule) 
         self.apply(init_weights)
         
     def __call__(self, tokens) -> tuple[torch.Tensor, torch.Tensor]:
@@ -80,7 +87,10 @@ class TakoNet(nn.Module):
             value: Tensor of shape [batch_size, 3].
         """
         # Token embedding + positional encoding
-        x = self.embedding(tokens) + self.positional_encoding.unsqueeze(0)
+        batch_size, seq_len = tokens.shape
+        position_indices = torch.arange(seq_len, device=tokens.device).unsqueeze(0)
+        positional_embeds = self.positional_encoding(position_indices)
+        x = self.embedding(tokens) + positional_embeds
         # Transformer encoder
         x = self.transformer(x)
         # Flatten sequence for output heads

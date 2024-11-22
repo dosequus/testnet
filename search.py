@@ -12,7 +12,7 @@ from tokenizer import tokenize
 
 logger = logging.getLogger(__name__)
 
-def _adjust_max_nodes(move_count: int, max_nodes: int, growth_rate: float = 0.02, min_nodes: int = 10) -> int:
+def _adjust_max_nodes(move_count: int, max_nodes: int, growth_rate: float = 0.02, min_nodes: int = 100) -> int:
     """
     Adjusts the maximum node count for a search algorithm based on the current move count.
     
