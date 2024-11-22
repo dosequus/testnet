@@ -146,10 +146,10 @@ def train(model: TakoNet, optimizer: optim.Optimizer, scheduler: optim.lr_schedu
         with open("logs/policy.csv", 'a') as logfile:
             logfile.write(f"{epoch+1},{policy_loss.item()}\n")
         
-        if (epoch+1) % config.train.evaluation_interval == 0:
+        if (epoch) % config.train.evaluation_interval == 0:
             # board_window = None if not config.visualize else display.start()
 
-            evaluate.stockfish_benchmark(search.MCTS(model, explore_factor=0), num_games=config.evaluation.num_games, device=device, game_board=board_window)
+            evaluate.stockfish_benchmark(search.MCTS(model, explore_factor=0), num_games=config.evaluation.num_games, device=device)
             # Save the model
             torch.save({
                 'epoch': epoch,
@@ -180,7 +180,7 @@ if __name__ == '__main__':
         checkpoint = torch.load(checkpoint_path, map_location=model.device)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        epoch = checkpoint['epoch']
+        epoch = checkpoint['epoch'] if 'epoch' in checkpoint else 0
         print("Checkpoint loaded successfully.")
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")

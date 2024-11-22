@@ -4,14 +4,14 @@ model:
     value_output_size: 3
 
 mcts:
-    max_nodes: 600
+    max_nodes: 300
     thinking_time: 500
 
 train:
     num_epochs: 10000
     num_self_play_games: 25
     num_simulations: 1
-    max_depth: 10
+    max_depth: 15
     batch_size: 8
     replay_buffer_size: 5000
     evaluation_interval: 10   # Evaluate every 10 iterations

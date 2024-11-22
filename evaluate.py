@@ -2,6 +2,7 @@ import torch
 import torch.backends
 import torch.nn as nn
 from games.chessboard import ChessGame
+from network import TakoNet, TakoNetConfig
 from model import TransformerNet
 from chess import Move
 import torch.optim as optim
@@ -99,7 +100,7 @@ def selfplay_benchmark(agent1, agent2, num_games=10, device='cpu', save_path='ch
     
     print(f"Agent 1 Wins: {agent1_wins}, Agent 2 Wins: {agent2_wins}, Draws: {draws}")
 
-def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model', game_board=None):
+def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model'):
     """
     Evaluate the new model by playing a series of games against the previously saved benchmark model.
     If the new model wins more games, it becomes the new benchmark and is saved.
@@ -116,7 +117,7 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     
     stockfish_rating = 100
     max_depth=config.evaluation.max_depth
-    num_sim=config.evaluation.num_sim
+    num_sim=config.evaluation.num_simulations
     game_board = None if not config.visualize else display.start()
 
     def play_game(mcts, color):
@@ -216,19 +217,17 @@ if __name__ == '__main__':
         device = torch.device('cpu') 
     print(device.type)
     
-    selfplay_model = TransformerNet()
-    finetuned_model = TransformerNet()
+    selfplay_model = TakoNetConfig().create_model()
     
     
     selfplay_checkpoint = torch.load("checkpoints/best-model.pt")
-    finetuned_checkpoint = torch.load("checkpoints/best-finetuned-model.pt")
-
+    # finetuned_checkpoint = torch.load("checkpoints/best-finetuned-model.pt")
     selfplay_model.load_state_dict(selfplay_checkpoint['model_state_dict'])
-    finetuned_model.load_state_dict(finetuned_checkpoint['model_state_dict']) 
+    # finetuned_model.load_state_dict(finetuned_checkpoint['model_state_dict']) 
     
     print(config)
     
-    puzzle_benchmark(finetuned_model, 'puzzles/lichess_db_puzzle.csv')
-    # stockfish_benchmark(search.MCTS(finetuned_model, explore_factor=0), device=device.type)
+    # puzzle_benchmark(finetuned_model, 'puzzles/lichess_db_puzzle.csv')
+    stockfish_benchmark(search.MCTS(selfplay_model, explore_factor=0), device=device.type)
     # selfplay_benchmark(search.MCTS(selfplay_model, explore_factor=0),
     #                    search.MCTS(finetuned_model, explore_factor=0))

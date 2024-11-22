@@ -12,6 +12,28 @@ from tokenizer import tokenize
 
 logger = logging.getLogger(__name__)
 
+def _adjust_max_nodes(move_count: int, max_nodes: int, growth_rate: float = 0.02, min_nodes: int = 10) -> int:
+    """
+    Adjusts the maximum node count for a search algorithm based on the current move count.
+    
+    Args:
+        move_count (int): The current number of moves in the game.
+        max_nodes (int): The absolute maximum number of nodes to search.
+        growth_rate (float): Controls the rate at which the node count grows with moves.
+        min_nodes (int): The minimum number of nodes to search in the early game.
+
+    Returns:
+        int: The adjusted maximum node count.
+    """
+    
+    # Calculate the adjustment factor using an exponential/logistic growth model.
+    adjustment_factor = 1 - math.exp(-growth_rate * move_count)
+    
+    # Scale the adjustment factor to fit between min_nodes and max_nodes.
+    adjusted_nodes = min_nodes + (max_nodes - min_nodes) * adjustment_factor
+    
+    return int(adjusted_nodes)
+
 class MCTS:
     def __init__(self, nnet: TakoNet, explore_factor=np.sqrt(2)):
         self.nnet = nnet
@@ -149,7 +171,7 @@ class MCTS:
 
     def run(self, game: ChessGame, num_sim=10, max_depth=50, max_nodes=10) -> tuple[Node | None, Move]:
         pi = defaultdict(int)
-        
+        max_nodes = _adjust_max_nodes(game.move_count-1, max_nodes, min_nodes=100)
         for sim in range(num_sim):
             root = self._simulate(game.copy(), max_depth, max_nodes)
             root.update_pi(pi, sim+1)
