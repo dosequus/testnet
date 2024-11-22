@@ -1,21 +1,29 @@
+from tokenizer import tokenize
+import network
 import torch
-import torch.optim as optim
-from model import TransformerNet
-import os
+from games.chessboard import ChessGame
+import cProfile, pstats
+import search
+fen = "r6k/pp2r2p/4Rp1Q/3p4/8/1N1P2R1/PqP2bPP/7K b - - 0 24"
 
-checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
-epoch = 0
 
-model = TransformerNet()
-optimizer = optim.Adam(model.parameters())
+config = network.TakoNetConfig()
+nnet = config.create_model(device=torch.device('mps'))
+print(f"{nnet.count_params():,}")
 
-if os.path.isfile(checkpoint_path):
-    print(f"Loading checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=model.device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    print("Checkpoint loaded successfully.")
+game = ChessGame(fen, nnet.device)
 
-# print(optimizer.state_dict())
-# print(model.state_dict())
+# plogits, vlogits = nnet(game.to_tensor())
+# mask = game.get_legal_move_mask()
+
+# vprobs = vlogits.softmax(-1)
+# pprobs = (plogits+mask).softmax(-1)
+
+# pred_moves = game.create_move_map(pprobs)
+mcts = search.MCTS(nnet)
+
+with cProfile.Profile(builtins=False) as pr:
+    res = mcts.run(game, num_sim=1, max_nodes=500)
+    print(res)
+    ps = pstats.Stats(pr).sort_stats(pstats.SortKey.CUMULATIVE)
+    ps.print_stats(20)

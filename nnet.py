@@ -96,8 +96,10 @@ class ViTEncoderOnly(nn.Module):
 
         self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
         
+    def __call__(self, img) -> torch.Tensor:
+        return self.forward(img)
 
-    def forward(self, img):
+    def forward(self, img) -> torch.Tensor:
         *_, h, w, dtype = *img.shape, img.dtype
 
         x = self.to_patch_embedding(img)

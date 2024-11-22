@@ -5,22 +5,23 @@ import numpy as np
 
 from collections import defaultdict
 
-from chess import Move
+from chess import Move, Board
 from games.chessboard import ChessGame
-from model import TransformerNet
+from network import TakoNet
+from tokenizer import tokenize
 
 logger = logging.getLogger(__name__)
 
 class MCTS:
-    def __init__(self, nnet: TransformerNet, explore_factor=np.sqrt(2)):
+    def __init__(self, nnet: TakoNet, explore_factor=np.sqrt(2)):
         self.nnet = nnet
         self.memo = {}
         self.explore_factor = explore_factor
         
     class Node:
-        def __init__(self, parent, state, temperature, prior_prob=0):
+        def __init__(self, parent, fen, temperature, prior_prob=0):
             self.parent = parent
-            self.state = state
+            self.fen = fen
             self.temperature = temperature
             self.children = {}
             self.prior_prob = prior_prob
@@ -61,37 +62,41 @@ class MCTS:
             
             return best_move, best_child
 
-        def create_child(self, move, val):
-            try: 
-                new_state = ChessGame.next_state(self.state, move)
-                return MCTS.Node(self, new_state, self.temperature*.70, prior_prob=val)
+        def create_child(self, board: Board, move: Move, val: int):
+            try:
+                board.push(move)
+                node = MCTS.Node(self, board.fen(), self.temperature*.70, prior_prob=val)
+                board.pop()
+                return node
             except:
                 return None
 
-        def expand(self, nnet: TransformerNet, memo):
+        def expand(self, nnet: TakoNet, memo):
             
-            game = ChessGame.load(self.state)
+            game = ChessGame(self.fen, nnet.device)
 
             # Check if the current state has already been evaluated and is in memo
-            state_key = game.board.fen()  # Use FEN (Forsyth-Edwards Notation) as a unique identifier
-            if state_key in memo:
-                self.action_val = memo[state_key]
+            if self.fen in memo:
+                self.action_val = memo[self.fen]
                 return
 
             # Get model predictions
-            pi, val = nnet.predict_single(game.to_tensor(), game.get_legal_move_mask())
-            # pi, val = (torch.rand(8, 8, 73), torch.rand(3))
-            pred_moves = game.pi_to_move_map(pi)
+            mask = game.get_legal_move_mask()
+            policy_logits, value_logits = nnet.predict_single(game.to_tensor())
+            # pi, val = 
+            value_probs = value_logits.softmax(-1)
+            policy_probs = (policy_logits + mask).softmax(-1)
+            pred_moves = game.create_move_map(policy_probs)
 
             curr_score = game.score()
             if curr_score == 1:
-                val = torch.tensor([1., 0., 0.]).to(val.device)
+                value_probs = torch.tensor([1., 0., 0.], device=value_probs.device)
             elif curr_score == 0:
-                val = torch.tensor([0., 1., 0.]).to(val.device)
+                value_probs = torch.tensor([0., 1., 0.], device=value_probs.device)
             elif curr_score == -1:
-                val = torch.tensor([0., 0., 1.]).to(val.device)
+                value_probs = torch.tensor([0., 0., 1.], device=value_probs.device)
 
-            win_prob, draw_prob, loss_prob = val.tolist()
+            win_prob, draw_prob, loss_prob = value_probs.tolist()
 
             if game.turn == -1:  # white just played a move
                 # Prioritize wins > draws > losses
@@ -101,10 +106,10 @@ class MCTS:
 
             # If this is a terminal state, memoize the result 
             if game.score():
-                memo[state_key] = self.action_val * 100
+                memo[self.fen] = self.action_val * 100
 
             # Expand children
-            self.children = {move: self.create_child(move, eval) for move, eval in pred_moves.items()}
+            self.children = {move: self.create_child(game.board, move, eval) for move, eval in pred_moves.items()}
             self.children = dict(filter(lambda x:x[1], self.children.items()))
 
         def backup(self):
@@ -121,7 +126,7 @@ class MCTS:
     
     def _simulate(self, game, max_depth, max_nodes):
         temperature = self.explore_factor * (0.70**game.move_count)
-        root = self.Node(None, game.state, temperature)
+        root = self.Node(None, game.board.fen(), temperature)
         # Selection and Expansion phase
         while not game.over():
             curr_node = root
