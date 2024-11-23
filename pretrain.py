@@ -161,7 +161,7 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0):    
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
-    puzzle_dataset = pd.read_csv(csv_path, nrows=100_000, usecols=['FEN', 'Moves', 'Rating'])
+    puzzle_dataset = pd.read_csv(csv_path, nrows=10_000, usecols=['FEN', 'Moves', 'Rating'])
     NUM_PUZZLES = len(puzzle_dataset)
     print(f"Preprocessing {NUM_PUZZLES:,} rows...")
     preprocess_data(puzzle_dataset)
@@ -172,7 +172,6 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
         batch = compile_batch(config.pretrain.batch_size, device=model.device)
 
         state_tensor, mask, true_policy, true_value = batch
-
         # Forward pass
         policy_logits, value_logits = model(state_tensor)
         # Compute loss
@@ -236,7 +235,7 @@ if __name__ == '__main__':
     
     model = TakoNetConfig().create_model() # pass device to create_model for GPU
     print(f"{model.count_params():,} params")
-    optimizer = optim.AdamW(model.parameters(), lr=0.001)
+    optimizer = optim.AdamW(model.parameters(), lr=0.005)
     checkpoint_path = "checkpoints/best-pretrained-model.pt" # TODO: configure with command line args
     epoch = 0
     if os.path.isfile(checkpoint_path):
@@ -248,7 +247,7 @@ if __name__ == '__main__':
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
     
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=312, T_mult=2, eta_min=1e-5)
     print(config)
     download_training_set()
     train(model, optimizer, scheduler, starting_epoch=0)

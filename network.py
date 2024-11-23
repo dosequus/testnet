@@ -43,7 +43,7 @@ class TakoNet(nn.Module):
         super(TakoNet, self).__init__()
         self.device = device
         self.embedding = nn.Embedding(vocab_size, d_model, device=device)  # Token embedding
-        self.positional_encoding = nn.Embedding(seq_len, d_model)  # Learnable positional encoding
+        self.positional_encoding = nn.Embedding(seq_len, d_model, device=device)  # Learnable positional encoding
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model, num_heads, dropout=dropout),
             num_layers

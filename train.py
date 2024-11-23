@@ -42,7 +42,7 @@ class Arena:
             w, d, l = 0, 0, 0
             for future in concurrent.futures.as_completed(futures):
                 if future.result():
-                    states, policies, target_result = future.result()
+                    states, masks, policies, target_result = future.result()
                     if torch.equal(target_result, torch.tensor([1., 0., 0.])):
                         w += 1
                     elif torch.equal(target_result, torch.tensor([0., 1., 0.])):
@@ -50,8 +50,8 @@ class Arena:
                     else:
                         l += 1  
                     targets = [target_result]*len(states)
-                    temp_memory.extend(list(zip(states, policies, targets)))
-                    print((w+d+l), "/", self.total_games, " games completed", " | added ", len(states), " new states to replay buffer", sep='')
+                    temp_memory.extend(list(zip(states, masks, policies, targets)))
+                    print(f"{(w+d+l)}/{self.total_games} games completed | {len(self.memory)+len(states)} total positions saved.")
                 else:
                     print("Game tossed for error")
             self.memory.extend(temp_memory)
@@ -63,19 +63,21 @@ class Arena:
             
             mcts_agent = search.MCTS(self.model)  # Each process gets its own MCTS instance
             game = ChessGame()
-            states, policies = [], []
+            states, policies, masks = [], [], []
             # board_window = None if not config.visualize else display.start()
+            root = search.Node(None, game.board.fen(), mcts_agent.explore_factor**(game.move_count))
             while not game.over():
-                root, best_move = mcts_agent.run(game, 
-                                                max_depth=config.train.max_depth, 
-                                                num_sim=config.train.num_simulations, 
-                                                max_nodes=config.mcts.max_nodes)
+                root, best_move = mcts_agent.run(root, num_sim=config.train.num_simulations, think_time=1)
                 
                 total_visits = 1 + sum(child.visit_count for child in root.children.values())
                 policy_map = {move: torch.tensor(node.visit_count / total_visits) for move, node in root.children.items()}
                 
                 states.append(game.to_tensor())
                 policies.append(game.create_sparse_policy(policy_map))
+                masks.append(game.get_legal_move_mask())
+                
+                root = root.children[best_move]
+                root.parent = None
                 game.make_move(best_move)
                 # if config.visualize: display.update(game.board.fen(), board_window)  
             
@@ -88,23 +90,26 @@ class Arena:
             else:
                 target_result = torch.tensor([0.0, 0.0, 1.0])  # Loss
             
-            return states, policies, target_result
+            return states, masks, policies, target_result
         except Exception as e:
             # toss the game
             print(e)
             return None
+        finally:
+            import gc; gc.collect()
 
     def compile_batch(self):
         """Compile a batch of states for training."""
         if len(self.memory) >= self.batch_size:
             batch = random.sample(list(self.memory), self.batch_size)
-            state_batch, policy_batch, value_batch = zip(*batch)
+            state_batch, mask_batch, policy_batch, value_batch = zip(*batch)
             
             state_tensor = torch.stack(state_batch).to(self.device)
+            mask_tensor = torch.stack(mask_batch).to(self.device)
             policy_tensor = torch.stack(policy_batch).to(self.device)
             value_tensor = torch.stack(value_batch).to(self.device)
-            
-            return state_tensor, policy_tensor, value_tensor
+
+            return state_tensor, mask_tensor, policy_tensor, value_tensor
         else:
             return None
 
@@ -123,13 +128,13 @@ def train(model: TakoNet, optimizer: optim.Optimizer, scheduler: optim.lr_schedu
         for step in tqdm.trange(len(arena.memory)//arena.batch_size):
             batch = arena.compile_batch()
             if batch:
-                state_tensor, policy_target, value_target = batch
+                state_tensor, mask, policy_target, value_target = batch
                 
                 # Forward pass
                 policy_logits, value_logits = model(state_tensor)
                 # Compute loss
                 value_loss = nn.CrossEntropyLoss(label_smoothing=0.1)(value_logits, value_target)
-                policy_loss = nn.CrossEntropyLoss(label_smoothing=0.1)(policy_logits, policy_target)
+                policy_loss = nn.CrossEntropyLoss(label_smoothing=0.1)(policy_logits+mask.log(), policy_target)
                 
                 total_loss = policy_loss + value_loss
                 
@@ -166,13 +171,16 @@ if __name__ == '__main__':
     elif torch.backends.mps.is_available():
         device = torch.device('mps')
     else:
-        device = torch.device('cpu') 
-    print(device.type)
+        device = torch.device('cpu')
     
     model = TakoNetConfig().create_model() # pass device to create_model for GPU
     
     optimizer = optim.AdamW(model.parameters(), lr=config.model.learning_rate)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, verbose=True)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
+                                                               T_0=10, 
+                                                               T_mult=2, 
+                                                               eta_min=1e-6, 
+                                                               verbose=True)
     checkpoint_path = "checkpoints/best-model.pt" # TODO: configure with command line args
     epoch = 0
     if os.path.isfile(checkpoint_path):

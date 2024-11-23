@@ -100,7 +100,7 @@ def selfplay_benchmark(agent1, agent2, num_games=10, device='cpu', save_path='ch
     
     print(f"Agent 1 Wins: {agent1_wins}, Agent 2 Wins: {agent2_wins}, Draws: {draws}")
 
-def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints/best_model'):
+def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path='checkpoints/best_model'):
     """
     Evaluate the new model by playing a series of games against the previously saved benchmark model.
     If the new model wins more games, it becomes the new benchmark and is saved.
@@ -120,22 +120,28 @@ def stockfish_benchmark(mcts, num_games=10, device='cpu', save_path='checkpoints
     num_sim=config.evaluation.num_simulations
     game_board = None if not config.visualize else display.start()
 
-    def play_game(mcts, color):
+    def play_game(mcts: search.MCTS, color):
         """
         Simulate a game between two models using the provided ChessGame and search2 logic.
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
         game = ChessGame()
         if game_board: display.update(game.board.fen(), game_board)
-        stockfish = Stockfish(depth=max_depth) # keep stockfish at the same depth
+        stockfish = Stockfish(depth=2) # keep stockfish at the same depth
         stockfish.set_elo_rating(stockfish_rating)
+        root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
         while not game.over():
             if game.turn == color:  # model1 plays as white
-                _, best_move = mcts.run(game.copy(), max_depth=max_depth, num_sim=num_sim, max_nodes=config.mcts.max_nodes)
+                root, best_move = mcts.run(root, num_sim=num_sim)
             else:  
                 stockfish.set_fen_position(game.board.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())
             
+            if best_move in root.children:
+                root = root.children[best_move]
+            else:
+                root = root.create_child(game.board, best_move, 0)
+            root.parent = None
             game.make_move(best_move)
             if game_board: display.update(game.board.fen(), game_board)
         if game_board: display.update(game.board.fen(), game_board)
@@ -220,7 +226,7 @@ if __name__ == '__main__':
     selfplay_model = TakoNetConfig().create_model()
     
     
-    selfplay_checkpoint = torch.load("checkpoints/best-model.pt")
+    selfplay_checkpoint = torch.load("checkpoints/best-pretrained-model.pt")
     # finetuned_checkpoint = torch.load("checkpoints/best-finetuned-model.pt")
     selfplay_model.load_state_dict(selfplay_checkpoint['model_state_dict'])
     # finetuned_model.load_state_dict(finetuned_checkpoint['model_state_dict']) 
