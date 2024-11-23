@@ -73,17 +73,17 @@ class ChessGame(AbstractGame):
     def __repr__(self):
         return repr(self.board)  
     
-    def get_legal_move_mask(self) -> torch.TensorType:
-        mask = torch.full((1, NUM_ACTIONS), -torch.inf, device=self.device)  # moves are illegal to start
+    def get_legal_move_mask(self) -> torch.Tensor:
+        mask = torch.zeros(NUM_ACTIONS, device=self.device)  # moves are illegal to start
         for move in self.valid_moves():
             i = tokenize_action(move.uci())
-            mask[0][i] = 0
-        return mask
+            mask[i] = 1
+        return mask + 1e-10
     
     def create_move_map(self, probs: torch.Tensor) -> "dict[Move, int]":
         move_mapping = {}
         for move in self.valid_moves():
-            move_mapping[move] = probs[0][tokenize_action(move.uci())].item()
+            move_mapping[move] = probs[tokenize_action(move.uci())].item()
         return move_mapping
     
     def create_sparse_policy(self, policy: dict[chess.Move, torch.Tensor]):
