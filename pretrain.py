@@ -184,7 +184,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
 
     for epoch in range(starting_epoch, config.pretrain.num_epochs):
         print("Epoch:", epoch+1)       
-        pbar = tqdm.tqdm(compile_batches(config.pretrain.batch_size), total=NUM_PUZZLES//config.pretrain.batch_size)
+        pbar = tqdm.tqdm(compile_batches(config.pretrain.batch_size), total=NUM_PUZZLES//config.pretrain.batch_size+1)
         for batch in pbar:
             state_tensor, mask, true_policy, true_value = batch
             # Forward pass
