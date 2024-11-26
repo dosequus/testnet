@@ -9,14 +9,15 @@ from tokenizer import NUM_ACTIONS
 
 @dataclass
 class TakoNetConfig:
-    vocab_size: int = 32              # Number of unique FEN tokens
-    seq_len: int = 77                 # Fixed length of FEN token sequence
-    d_model: int = 128                # Dimensionality of token embeddings and model layers
-    num_heads: int = 8               # Number of attention heads in the transformer
-    num_layers: int = 15              # Number of transformer encoder layers
-    policy_dim: int = NUM_ACTIONS     # Dimensionality of policy head output
-    value_dim: int = 3                # Dimensionality of value head output
-    dropout: Optional[float] = 0    # Dropout rate for transformer layers
+    vocab_size: int = 32                # Number of unique FEN tokens
+    seq_len: int = 77                   # Fixed length of FEN token sequence
+    d_model: int = 256                  # Dimensionality of token embeddings and model layers
+    num_heads: int = 8                  # Number of attention heads in the transformer
+    num_layers: int = 8                # Number of transformer encoder layers
+    policy_dim: int = NUM_ACTIONS       # Dimensionality of policy head output
+    value_dim: int = 3                  # Dimensionality of value head output
+    dropout: Optional[float] = 0.1        # Dropout rate for transformer layers
+    widening_factor: int = 4
 
     def create_model(self, device = 'cpu'):
         """
@@ -35,23 +36,55 @@ class TakoNetConfig:
             policy_dim=self.policy_dim,
             value_dim=self.value_dim,
             dropout=self.dropout,
+            widening_factor=self.widening_factor,
             device=device
         )
         
 class TakoNet(nn.Module):
-    def __init__(self, vocab_size, seq_len, d_model, num_heads, num_layers, policy_dim, value_dim, dropout, device = 'cpu'):
+    
+    class SwiGLU(nn.Module):
+        def __init__(self, w1, w2, w3):
+            super().__init__()
+            self.w1
+            self.w2
+            self.w3
+        
+        def forward(self, x):
+            x1 = F.linear(x, self.w1.weight)
+            x2 = F.linear(x, self.w2.weight)
+            hidden = F.silu(x1) * x2
+            return F.linear(hidden, self.w3.weight)
+
+        def __call__(self, x):
+            return self.forward(x)
+        
+    def __init__(self, vocab_size, 
+                 seq_len, 
+                 d_model, 
+                 num_heads, 
+                 num_layers, 
+                 policy_dim, 
+                 value_dim, 
+                 dropout,
+                 widening_factor,
+                 device = 'cpu'):
         super(TakoNet, self).__init__()
         self.device = device
         self.embedding = nn.Embedding(vocab_size, d_model, device=device)  # Token embedding
         self.positional_encoding = nn.Embedding(seq_len, d_model, device=device)  # Learnable positional encoding
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model, num_heads, dropout=dropout),
+        self.transformer = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model, 
+                                       num_heads, 
+                                       dim_feedforward=widening_factor, 
+                                    #    activation=self.SwiGLU,
+                                       batch_first=True,
+                                       dropout=dropout),
             num_layers
         ).to(device)
         self.policy_head = nn.Sequential(
             nn.Linear(seq_len * d_model, d_model),
-            nn.GELU(),
-            nn.Linear(d_model, policy_dim)
+            # nn.GELU(),
+            # nn.Linear(d_model, policy_dim)
         ).to(device)
         self.value_head = nn.Sequential(
             nn.Linear(seq_len * d_model, d_model),
@@ -91,8 +124,8 @@ class TakoNet(nn.Module):
         position_indices = torch.arange(seq_len, device=tokens.device).unsqueeze(0)
         positional_embeds = self.positional_encoding(position_indices)
         x = self.embedding(tokens) + positional_embeds
-        # Transformer encoder
-        x = self.transformer(x)
+        # Transformer decoder
+        x = self.transformer(x, torch.zeros_like(x))
         # Flatten sequence for output heads
         x_flat = x.flatten(1)  # Shape: [batch_size, seq_len * d_model]
         # Policy and value predictions
