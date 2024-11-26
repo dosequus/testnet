@@ -82,14 +82,14 @@ class TakoNet(nn.Module):
             num_layers
         ).to(device)
         self.policy_head = nn.Sequential(
-            nn.Linear(seq_len * d_model, d_model),
+            nn.Linear(seq_len * d_model, policy_dim),
             # nn.GELU(),
             # nn.Linear(d_model, policy_dim)
         ).to(device)
         self.value_head = nn.Sequential(
-            nn.Linear(seq_len * d_model, d_model),
-            nn.GELU(),
-            nn.Linear(d_model, value_dim)
+            nn.Linear(seq_len * d_model, policy_dim),
+            # nn.GELU(),
+            # nn.Linear(d_model, value_dim)
         ).to(device)
         
         def init_weights(module):
