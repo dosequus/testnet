@@ -10,6 +10,7 @@ import pandas as pd
 import os
 import zstandard as zstd
 import requests
+import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import evaluate
 from chess import Move
@@ -103,7 +104,7 @@ def preprocess_data(puzzles: pd.DataFrame, save_path: str = "puzzles/preprocesse
     print(f"Preprocessed data saved to {save_path}")
 
 
-def compile_batch(batch_size: int, preprocessed_path: str = "puzzles/preprocessed_chess_puzzles.pt", device = 'cpu'):
+def compile_batches(batch_size: int, preprocessed_path: str = "puzzles/preprocessed_chess_puzzles.pt", device = 'cpu'):
     """
     Load preprocessed data and compile a random batch for training.
     Args:
@@ -119,16 +120,30 @@ def compile_batch(batch_size: int, preprocessed_path: str = "puzzles/preprocesse
     value_tensors = data["value_tensors"]
     mask_tensors = data["mask_tensors"]
 
-    # Sample random indices for the batch
-    indices = torch.randperm(len(state_tensors))[:batch_size]
+    # Ensure all tensors have the same length
+    dataset_size = len(state_tensors)
+    assert all(len(tensor) == dataset_size for tensor in [policy_tensors, value_tensors, mask_tensors]), \
+        "Mismatch in tensor lengths in preprocessed data."
 
+    # Randomly select indices for the batch
+    indices = random.sample(range(dataset_size), batch_size)
+    
+    indices = list(range(dataset_size))
+    random.shuffle(indices)
+    
+    # Create batches
+    def batch_generator():
+        for i in range(0, dataset_size, batch_size):
+            batch_indices = indices[i:i + batch_size]
+            yield (
+                state_tensors[batch_indices],
+                mask_tensors[batch_indices],
+                policy_tensors[batch_indices],
+                value_tensors[batch_indices],
+            )
+    
     # Return batched tensors
-    return (
-        state_tensors[indices],
-        mask_tensors[indices],
-        policy_tensors[indices],
-        value_tensors[indices],
-    )
+    return batch_generator()
 
 def calculate_f1_score(logits, truth):
     # Convert policy logits to predicted classes
@@ -144,7 +159,6 @@ def calculate_f1_score(logits, truth):
 
 def calculate_top_k_accuracy(logits, truth, k = 3):
 
-    torch.set_printoptions(profile='full')
      # Convert truth to class indices if it's one-hot encoded
     if truth.ndim > 1 and truth.size(1) > 1:
         truth = torch.argmax(truth, dim=1)  # Shape: [batch_size]
@@ -161,39 +175,41 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0):    
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
-    puzzle_dataset = pd.read_csv(csv_path, nrows=10_000, usecols=['FEN', 'Moves', 'Rating'])
+    puzzle_dataset = pd.read_csv(csv_path, nrows=100_000, usecols=['FEN', 'Moves', 'Rating'])
     NUM_PUZZLES = len(puzzle_dataset)
     print(f"Preprocessing {NUM_PUZZLES:,} rows...")
     preprocess_data(puzzle_dataset)
     print("Starting pre-training...")
     alpha = config.pretrain.alpha
-    pbar = tqdm.tqdm(total=config.pretrain.num_epochs)
-    for epoch in range(starting_epoch, config.pretrain.num_epochs):           
-        batch = compile_batch(config.pretrain.batch_size, device=model.device)
 
-        state_tensor, mask, true_policy, true_value = batch
-        # Forward pass
-        policy_logits, value_logits = model(state_tensor)
-        # Compute loss
-        value_loss = nn.CrossEntropyLoss()(value_logits, true_value)
-        policy_loss = nn.CrossEntropyLoss()(policy_logits + mask.log(), true_policy)
-        total_loss = (1 - alpha) * value_loss + alpha * policy_loss
-        # with open("logs/pretraining/value.csv", 'a+') as logfile:
-        #     logfile.write(f"{epoch},{value_loss.item()}\n")
-        
-        # Backpropagation and optimization
-        optimizer.zero_grad()
-        total_loss.backward()
-        optimizer.step()
-        pbar.update()
-        f1 = calculate_f1_score(policy_logits+mask.log(), true_policy)
+    for epoch in range(starting_epoch, config.pretrain.num_epochs):
+        print("Epoch:", epoch+1)       
+        pbar = tqdm.tqdm(compile_batches(config.pretrain.batch_size), total=NUM_PUZZLES//config.pretrain.batch_size)
+        for batch in pbar:
+            state_tensor, mask, true_policy, true_value = batch
+            # Forward pass
+            policy_logits, value_logits = model(state_tensor)
+            # Compute loss
+            value_loss = nn.CrossEntropyLoss()(value_logits, true_value)
+            policy_loss = nn.CrossEntropyLoss()(policy_logits + mask.log(), true_policy)
+            total_loss = (1 - alpha) * value_loss + alpha * policy_loss
+            # with open("logs/pretraining/value.csv", 'a+') as logfile:
+            #     logfile.write(f"{epoch},{value_loss.item()}\n")
+            
+            # Backpropagation and optimization
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+            # f1 = calculate_f1_score(policy_logits+mask.log(), true_policy)
+            topk = calculate_top_k_accuracy(policy_logits+mask.log(), true_policy)
+            pbar.set_description_str(f"loss={total_loss.item():.3f}, T@3={topk:.4g}")
         
         with open("logs/pretraining/policy.csv", 'a+') as logfile:
                 logfile.write(f"{epoch},{policy_loss.item()}\n")
         with open("logs/pretraining/value.csv", 'a+') as logfile:
                 logfile.write(f"{epoch},{value_loss.item()}\n")
         scheduler.step()
-        pbar.set_description_str(f"loss={total_loss.item():.3f}, F1={f1:.4g}")
         
         if (epoch+1) % config.pretrain.evaluation_interval == 0:
             model.eval()

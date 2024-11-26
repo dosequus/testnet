@@ -132,7 +132,7 @@ def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path
         root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
         while not game.over():
             if game.turn == color:  # model1 plays as white
-                root, best_move = mcts.run(root, num_sim=num_sim)
+                root, best_move = mcts.run(root, think_time=5)
             else:  
                 stockfish.set_fen_position(game.board.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())

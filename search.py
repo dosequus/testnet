@@ -5,15 +5,18 @@ import numpy as np
 
 from collections import defaultdict
 
-from chess import Move, Board
+from chess import Move, Board, Outcome, Termination
 from games.chessboard import ChessGame
 from network import TakoNet
 from tokenizer import tokenize
+import sys
 
 logger = logging.getLogger(__name__)
 
-
 class Node:
+    
+    DRAWING_MOVE_PROB = 0.005
+    
     def __init__(self, parent, fen, temperature, prior_prob=0):
         self.parent = parent
         self.fen = fen
@@ -39,7 +42,7 @@ class Node:
         scores = np.array([child.action_val + child.UCB() for child in self.children.values()])
         
         # Apply the temperature to the scores
-        if self.temperature > 0:
+        if self.temperature > sys.float_info.epsilon:
             scaled_scores = scores / self.temperature
         else:
             scaled_scores = scores
@@ -59,13 +62,15 @@ class Node:
 
     def create_child(self, board: Board, move: Move, val: int):
         board.push(move)
-        node = Node(self, board.fen(), self.temperature*.70, prior_prob=val)
+        node = Node(self, board.fen(), self.temperature*0.9, prior_prob=val)
+        if board.outcome() == Outcome(Termination.FIVEFOLD_REPETITION, None):
+            node.prior_prob = self.DRAWING_MOVE_PROB
         board.pop()
         return node
 
     def expand(self, nnet: TakoNet, memo):
-        def win_prob_to_centipawn(w):
-            return 300*math.tan(1.5*(w-0.5))
+        def wdl_to_value(p_win, p_draw, p_loss):
+            return p_win - p_loss + 0.5*p_draw
         
         game = ChessGame(self.fen, nnet.device)
 
@@ -90,18 +95,13 @@ class Node:
         elif curr_score == -1:
             value_probs = torch.tensor([0., 0., 1.], device=value_probs.device)
 
-        whitewin, _, blackwin = value_probs.tolist()
+        if game.turn == -1:  
+            self.action_val = wdl_to_value(*reversed(value_probs.tolist()))
+        else: 
+            self.action_val = wdl_to_value(*value_probs.tolist())
 
-        if game.turn == -1:  # white just played a move
-            # Prioritize wins > draws > losses
-            self.action_val = win_prob_to_centipawn(blackwin)
-        else:  # Black's turn
-            self.action_val = win_prob_to_centipawn(whitewin)
-
-        # If this is a terminal state, memoize the result 
-        if game.score():
-            memo[self.fen] = self.action_val * 100
-
+        memo[self.fen] = self.action_val
+        
         # Expand children
         self.children = {move: self.create_child(game.board, move, eval) for move, eval in pred_moves.items()}
         self.children = dict(filter(lambda x:x[1], self.children.items()))
@@ -113,6 +113,7 @@ class Node:
             self.parent.visit_count += 1
             self.parent.action_val = new_action_val / self.parent.visit_count
             self.parent.backup()
+            
     def select_leaf(self):
         if len(self.children) > 0:
             _, child = self.select()
@@ -124,6 +125,11 @@ class MCTS:
         self.nnet = nnet
         self.memo = {}
         self.explore_factor = explore_factor
+        
+    def add_dirichlet_noise(self, root: Node, alpha: float = 0.3, epsilon: float = 0.25) -> np.ndarray:
+        dirichlet_noise = np.random.dirichlet([alpha] * len(root.children))
+        for i, child in enumerate(root.children):
+            root.children[child].prior_prob = (1 - epsilon) * root.children[child].prior_prob + epsilon * dirichlet_noise[i]
     
     def run(self, root: Node, num_sim=10, think_time=-1) -> tuple[Node, Move]:
         if think_time > 0:
@@ -133,11 +139,13 @@ class MCTS:
                 leaf = root.select_leaf()
                 leaf.expand(self.nnet, self.memo)
                 leaf.backup()
+                self.add_dirichlet_noise(root)
         else:
             for _ in range(num_sim):
                 leaf = root.select_leaf()
                 leaf.expand(self.nnet, self.memo)
                 leaf.backup()
+                self.add_dirichlet_noise(root)
         return root, root.select()[0]
 
 # Example usage:
