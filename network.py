@@ -40,6 +40,7 @@ class TakoNetConfig:
             device=device
         )
         
+        
 class TakoNet(nn.Module):
     
     class SwiGLU(nn.Module):
@@ -87,7 +88,7 @@ class TakoNet(nn.Module):
             # nn.Linear(d_model, policy_dim)
         ).to(device)
         self.value_head = nn.Sequential(
-            nn.Linear(seq_len * d_model, policy_dim),
+            nn.Linear(seq_len * d_model, value_dim),
             # nn.GELU(),
             # nn.Linear(d_model, value_dim)
         ).to(device)

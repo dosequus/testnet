@@ -125,24 +125,26 @@ def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path
         Simulate a game between two models using the provided ChessGame and search2 logic.
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
-        game = ChessGame()
+        game = ChessGame("rnbqkb1r/ppp1pppp/5n2/3p2B1/2PP4/8/PP2PPPP/RN1QKBNR b KQkq - 2 3")
         if game_board: display.update(game.board.fen(), game_board)
         stockfish = Stockfish(depth=2) # keep stockfish at the same depth
         stockfish.set_elo_rating(stockfish_rating)
         root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
         while not game.over():
             if game.turn == color:  # model1 plays as white
-                root, best_move = mcts.run(root, think_time=5)
+                root, best_move = mcts.run(root, think_time=1)
             else:  
                 stockfish.set_fen_position(game.board.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())
             
+            game.make_move(best_move)
+            
             if best_move in root.children:
                 root = root.children[best_move]
+                root.parent = None
             else:
-                root = root.create_child(game.board, best_move, 0)
-            root.parent = None
-            game.make_move(best_move)
+                root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
+            
             if game_board: display.update(game.board.fen(), game_board)
         if game_board: display.update(game.board.fen(), game_board)
         result = game.score()
@@ -161,7 +163,7 @@ def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path
     for game in pbar:
         # Alternate who plays as white/black
         pbar.set_description(f'+{new_model_wins}={draws}-{stockfish_wins}')
-        color = (-1)**game
+        color = -1
         result = play_game(mcts, color)
         opponent_elos.append(stockfish_rating)
         if result == color:
@@ -234,6 +236,6 @@ if __name__ == '__main__':
     print(config)
     
     # puzzle_benchmark(finetuned_model, 'puzzles/lichess_db_puzzle.csv')
-    stockfish_benchmark(search.MCTS(selfplay_model, explore_factor=0), device=device.type)
+    stockfish_benchmark(search.MCTS(selfplay_model, explore_factor=1), device=device.type)
     # selfplay_benchmark(search.MCTS(selfplay_model, explore_factor=0),
     #                    search.MCTS(finetuned_model, explore_factor=0))

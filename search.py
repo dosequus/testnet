@@ -38,9 +38,11 @@ class Node:
         temperature = 0.0: Purely deterministic selection, equivalent to always choosing the highest score
     
         """
+        assert len(self.children) > 0
+        
         # Get the action values and UCB scores for each child
         scores = np.array([child.action_val + child.UCB() for child in self.children.values()])
-        
+
         # Apply the temperature to the scores
         if self.temperature > sys.float_info.epsilon:
             scaled_scores = scores / self.temperature

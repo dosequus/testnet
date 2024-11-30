@@ -3,6 +3,7 @@
 
 import numpy as np
 import numpy.typing as npt
+import chess
 
 # pyfmt: disable
 _CHARACTERS = [
@@ -102,31 +103,45 @@ def tokenize(fen: str) -> npt.NDArray:
 # Generate all possible UCI moves (valid or not)
 def generate_uci_moves():
     files = "abcdefgh"
-    ranks = "12345678"
     promotions = "nbrq"
     moves = []
+    
+    board = chess.Board.empty()
 
     # Regular moves
-    for start_file in files:
-        for start_rank in ranks:
-            for end_file in files:
-                for end_rank in ranks:
-                    moves.append(f"{start_file}{start_rank}{end_file}{end_rank}")
+    for start in range(64):
+      end_squares = []
+      
+      board.set_piece_at(start, chess.Piece.from_symbol('Q'))
+      end_squares += board.attacks(start)
+      board.remove_piece_at(start)
+      
+      board.set_piece_at(start, chess.Piece.from_symbol('N'))
+      end_squares += board.attacks(start)
+      board.remove_piece_at(start)
+      
+      for end in end_squares:
+        moves.append(chess.square_name(start) + chess.square_name(end))
+                  
 
     # Promotion moves
-    for start_file in files:
-        for end_file in files:
-            for promotion in promotions:
-                # White pawn promotions
-                moves.append(f"{start_file}7{end_file}8{promotion}")
-                # Black pawn promotions
-                moves.append(f"{start_file}2{end_file}1{promotion}")
+    for rank, next_rank in [('2', '1'), ('7', '8')]:
+      for index_file, file in enumerate(files):
+        # Normal promotions.
+        move = f'{file}{rank}{file}{next_rank}'
+        moves.extend([(move + piece) for piece in promotions])
 
-    # Castling moves (standard)
-    moves.append("e1g1")  # White kingside
-    moves.append("e1c1")  # White queenside
-    moves.append("e8g8")  # Black kingside
-    moves.append("e8c8")  # Black queenside
+        # Capture promotions.
+        # Left side.
+        if file > 'a':
+          next_file = files[index_file - 1]
+          move = f'{file}{rank}{next_file}{next_rank}'
+          moves.extend([(move + piece) for piece in promotions])
+        # Right side.
+        if file < 'h':
+          next_file = files[index_file + 1]
+          move = f'{file}{rank}{next_file}{next_rank}'
+          moves.extend([(move + piece) for piece in promotions])
 
     return moves
 
