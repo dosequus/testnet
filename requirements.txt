@@ -12,3 +12,5 @@ typing_extensions==4.8.0
 vit-pytorch==0.38.1
 stockfish==3.28.0
 pyyaml==6.0.2
+tensorboard==2.18.0
+tensorboard-data-server==0.7.2

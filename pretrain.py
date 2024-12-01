@@ -210,11 +210,11 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0, save_elo=1000):    
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
-    NUM_PUZZLES = 100_000
+    NUM_PUZZLES = 500_000
     len_train, len_val = preprocess_data(csv_path, num_puzzles=NUM_PUZZLES)
     print("Starting pre-training...")
     alpha = config.pretrain.alpha
-    best_rating = 1335
+    best_rating = 0
     writer = SummaryWriter(log_dir="./logs/pretraining")
     for epoch in range(starting_epoch, config.pretrain.num_epochs):
         print("Epoch:", epoch+1)
