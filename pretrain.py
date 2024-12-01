@@ -20,7 +20,7 @@ from stockfish import Stockfish
 from math import ceil
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
-
+from torch.utils.tensorboard.writer import SummaryWriter
 config = Configuration().get_config()
 
 
@@ -134,7 +134,7 @@ def preprocess_data(puzzle_csv_path: str, num_puzzles: int, save_dir: str = "puz
 
     print(f"Training data saved to {train_save_path}")
     print(f"Validation data saved to {val_save_path}")
-    return len(train_set), len(val_set)
+    return len(state_tensors)*.8, len(state_tensors)*.2
 
 
 def compile_batches(batch_size: int, preprocessed_path: str = "puzzles/train_chess_puzzles.pt", device = 'cpu'):
@@ -176,7 +176,6 @@ def compile_batches(batch_size: int, preprocessed_path: str = "puzzles/train_che
                 value_tensors[batch_indices],
                 rating_tensors[batch_indices]
             )
-        yield None
     
     # Return batched tensors
     return batch_generator()
@@ -208,27 +207,27 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 
     return top_k_accuracy
 
-def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0):    
+def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0, save_elo=1000):    
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
-    NUM_PUZZLES = 10_000
+    NUM_PUZZLES = 100_000
     len_train, len_val = preprocess_data(csv_path, num_puzzles=NUM_PUZZLES)
     print("Starting pre-training...")
     alpha = config.pretrain.alpha
-    validation_set = compile_batches(config.pretrain.validation_batch_size,
-                                           "puzzles/val_chess_puzzles.pt")
+    best_rating = 1335
+    writer = SummaryWriter(log_dir="./logs/pretraining")
     for epoch in range(starting_epoch, config.pretrain.num_epochs):
         print("Epoch:", epoch+1)
-        batch_count = ceil(len_train/config.pretrain.batch_size) - 1 # subtract 1 for None yield
+        batch_count = ceil(len_train/config.pretrain.batch_size)
         pbar = tqdm.tqdm(compile_batches(config.pretrain.batch_size), total=batch_count)
         for batch in pbar:
             if not batch: continue
-            state_tensor, mask, true_policy, true_value, _ = batch
+            state_tensor, mask, true_policy, true_value, ratings = batch
             # Forward pass
             policy_logits, value_logits = model(state_tensor)
             # Compute loss
-            value_loss = nn.CrossEntropyLoss(label_smoothing=0.1)(value_logits, true_value)
-            policy_loss = nn.CrossEntropyLoss(label_smoothing=0.1)(policy_logits + mask.log(), true_policy)
+            value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value)
+            policy_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(policy_logits + mask.log(), true_policy)
             total_loss = (1 - alpha) * value_loss + alpha * policy_loss
             
             # Backpropagation and optimization
@@ -236,38 +235,78 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
             total_loss.backward()
             optimizer.step()
 
-            f1 = calculate_f1_score(policy_logits+mask.log(), true_policy)
-            topk = calculate_top_k_accuracy(policy_logits+mask.log(), true_policy)
-            pbar.set_description_str(f"loss={total_loss.item():.3f}, T@3={topk:.3g}, F1={f1:.3g}")
-        
-        with open("logs/pretraining/policy.csv", 'a+') as logfile:
-                logfile.write(f"{epoch},{policy_loss.item()}\n")
-        with open("logs/pretraining/value.csv", 'a+') as logfile:
-                logfile.write(f"{epoch},{value_loss.item()}\n")
-        scheduler.step()
-        
-        if (epoch+1) % config.pretrain.validation_interval == 0:
-            batch = next(validation_set)
-            if not batch:
-                validation_set = compile_batches(config.pretrain.validation_batch_size,
-                                           "puzzles/val_chess_puzzles.pt")
-                batch = next(validation_set)
-            state_tensor, mask, true_policy, true_value, ratings = batch
-
-            policy_logits, value_logits = model.predict(state_tensor) 
-
-            
             accuracy = calculate_top_k_accuracy(policy_logits+mask.log(), true_policy, k=1)
             score = round(accuracy * policy_logits.size(0))
-            print(f"puzzle score: {score}, Estimated puzzle rating: {evaluate.performance_rating(ratings.flatten().tolist(), score)}")
+            puzzle_rating = evaluate.performance_rating(ratings.flatten().tolist(), score)
+            pbar.set_description_str(f"loss={total_loss.item():.3f}, elo={puzzle_rating}, ACC={accuracy:.3g}")
+        
+            writer.add_scalar('Loss/Train', total_loss.item())
+            writer.add_scalar('Accuracy/Train', accuracy)
+            writer.add_scalar('Elo/Train', puzzle_rating)
+        
+        # validation
+        if (epoch+1) % config.pretrain.validation_interval == 0:
+            all_policy_logits = []
+            all_true_policies = []
+            all_masks = []
+            all_ratings = []
+            val_loss = 0
             
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'policy_loss': total_loss,
-            }, f'checkpoints/best-pretrained-model.pt')
+            val_batch_count = ceil(len_val/config.pretrain.validation_batch_size) 
+            pbar = tqdm.tqdm(compile_batches(config.pretrain.validation_batch_size, 'puzzles/val_chess_puzzles.pt'), total=val_batch_count)
+            for batch in pbar:
+
+                state_tensor, mask, true_policy, true_value, ratings = batch
+
+                policy_logits, value_logits = model.predict(state_tensor)
+                
+                value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value)
+                policy_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(policy_logits + mask.log(), true_policy)
+                val_loss += ((1 - alpha) * value_loss + alpha * policy_loss).item() 
+
+                all_policy_logits.append(policy_logits)
+                all_true_policies.append(true_policy)
+                all_masks.append(mask)
+                all_ratings.append(ratings)
+                
             
-            model.train()
+                
+            all_policy_logits = torch.cat(all_policy_logits, dim=0)
+            all_true_policies = torch.cat(all_true_policies, dim=0)
+            all_masks = torch.cat(all_masks, dim=0)
+            all_ratings = torch.cat(all_ratings, dim=0)
+
+
+            # Apply the mask to logits (ensuring illegal moves have minimal contribution)
+            masked_logits = all_policy_logits + all_masks.log()
+
+            # Calculate top-k accuracy over the entire validation set
+            accuracy = calculate_top_k_accuracy(masked_logits, all_true_policies, k=1)
+
+            # Calculate total score for puzzle performance
+            score = round(accuracy * all_policy_logits.size(0))
+
+            # Estimate puzzle rating from performance
+            model_puzzle_rating = evaluate.performance_rating(
+                all_ratings.flatten().tolist(), 
+                score
+            )
+            writer.add_scalar('Loss/Val', val_loss)
+            writer.add_scalar('Accuracy/Val', accuracy)
+            writer.add_scalar('Elo/Val', model_puzzle_rating)
+            print(f"val puzzle score: {score}, Estimated puzzle rating: {model_puzzle_rating}")
+            if model_puzzle_rating > best_rating:
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'policy_loss': total_loss,
+                    'puzzle_rating': model_puzzle_rating, 
+                }, f'checkpoints/best-pretrained-model.pt')
+                print("model saved.")
+                best_rating = model_puzzle_rating
+        # scheduler step
+        scheduler.step()        
+    writer.close()
 
 if __name__ == '__main__':
     # Determine the device to use: CUDA > MPS > CPU
@@ -292,7 +331,13 @@ if __name__ == '__main__':
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
     
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2, eta_min=1e-6)
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=5, 
+        T_mult=2, 
+        eta_min=1e-6, 
+        verbose=True
+    )
     print(config)
     download_training_set()
     train(model, optimizer, scheduler, starting_epoch=0)

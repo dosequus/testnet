@@ -38,10 +38,13 @@ _CHARACTERS = [
     'K',
     'w',
     '.',
+    'SOS',
+    'EOS'
 ]
 # pyfmt: enable
 _CHARACTERS_INDEX = {letter: index for index, letter in enumerate(_CHARACTERS)}
 _SPACES_CHARACTERS = frozenset({'1', '2', '3', '4', '5', '6', '7', '8'})
+VOCAB_SIZE = len(_CHARACTERS)
 SEQUENCE_LENGTH = 77
 
 def tokenize(fen: str) -> npt.NDArray:

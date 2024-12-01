@@ -1,23 +1,31 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import enum
+from tokenizer import NUM_ACTIONS, SEQUENCE_LENGTH, VOCAB_SIZE, _CHARACTERS
 
-from tokenizer import NUM_ACTIONS
+
+class PositionalEncodings(enum.Enum):
+    SINUSOID = enum.auto()
+    LEARNED = enum.auto()
+
 
 @dataclass
 class TakoNetConfig:
-    vocab_size: int = 32                # Number of unique FEN tokens
-    seq_len: int = 77                   # Fixed length of FEN token sequence
-    d_model: int = 256                  # Dimensionality of token embeddings and model layers
-    num_heads: int = 8                  # Number of attention heads in the transformer
-    num_layers: int = 8                # Number of transformer encoder layers
+    vocab_size: int = VOCAB_SIZE        # Number of unique FEN tokens
+    seq_len: int = SEQUENCE_LENGTH      # Fixed length of FEN token sequence
+    d_model: int = 64                  # Dimensionality of token embeddings and model layers
+    num_heads: int = 4                  # Number of attention heads in the transformer
+    num_layers: int = 4                 # Number of transformer encoder layers
     policy_dim: int = NUM_ACTIONS       # Dimensionality of policy head output
     value_dim: int = 3                  # Dimensionality of value head output
-    dropout: Optional[float] = 0.1        # Dropout rate for transformer layers
+    dropout: Optional[float] = 0      # Dropout rate for transformer layers
     widening_factor: int = 4
+    pos_encodings: PositionalEncodings = PositionalEncodings.LEARNED
 
     def create_model(self, device = 'cpu'):
         """
@@ -28,15 +36,7 @@ class TakoNetConfig:
         """
         device = torch.device(device)
         return TakoNet(
-            vocab_size=self.vocab_size,
-            seq_len=self.seq_len,
-            d_model=self.d_model,
-            num_heads=self.num_heads,
-            num_layers=self.num_layers,
-            policy_dim=self.policy_dim,
-            value_dim=self.value_dim,
-            dropout=self.dropout,
-            widening_factor=self.widening_factor,
+            config=self,
             device=device
         )
         
@@ -59,36 +59,39 @@ class TakoNet(nn.Module):
         def __call__(self, x):
             return self.forward(x)
         
-    def __init__(self, vocab_size, 
-                 seq_len, 
-                 d_model, 
-                 num_heads, 
-                 num_layers, 
-                 policy_dim, 
-                 value_dim, 
-                 dropout,
-                 widening_factor,
+    def __init__(self, 
+                 config: TakoNetConfig,
                  device = 'cpu'):
         super(TakoNet, self).__init__()
         self.device = device
-        self.embedding = nn.Embedding(vocab_size, d_model, device=device)  # Token embedding
-        self.positional_encoding = nn.Embedding(seq_len, d_model, device=device)  # Learnable positional encoding
+        self.seq_len = config.seq_len + 2
+        self.sos_token = _CHARACTERS.index('SOS')
+        self.eos_token = _CHARACTERS.index('EOS')
+        self.embedding = nn.Embedding(config.vocab_size, config.d_model, device=device)  # Token embedding
+        match config.pos_encodings:
+            case PositionalEncodings.LEARNED:
+                self.positional_encoding = nn.Embedding(self.seq_len, config.d_model, device=device)  # Learnable positional encoding
+            case PositionalEncodings.SINUSOID:
+                self.positional_encoding = self.sinusoid_position_encoding(
+                    sequence_length = self.seq_len, 
+                    hidden_size = config.d_model,
+                )
         self.transformer = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model, 
-                                       num_heads, 
-                                       dim_feedforward=widening_factor, 
-                                    #    activation=self.SwiGLU,
+            nn.TransformerDecoderLayer(config.d_model, 
+                                       config.num_heads, 
+                                       dim_feedforward=config.widening_factor, 
                                        batch_first=True,
-                                       dropout=dropout),
-            num_layers
+                                       dropout=config.dropout),
+            config.num_layers
         ).to(device)
+        self.layer_norm = nn.LayerNorm(config.d_model)
         self.policy_head = nn.Sequential(
-            nn.Linear(seq_len * d_model, policy_dim),
+            nn.Linear(config.d_model, config.policy_dim),
             # nn.GELU(),
             # nn.Linear(d_model, policy_dim)
         ).to(device)
         self.value_head = nn.Sequential(
-            nn.Linear(seq_len * d_model, value_dim),
+            nn.Linear(config.d_model, config.value_dim),
             # nn.GELU(),
             # nn.Linear(d_model, value_dim)
         ).to(device)
@@ -117,21 +120,23 @@ class TakoNet(nn.Module):
             tokens: Tensor of shape [batch_size, seq_len] (FEN tokens as integers).
         
         Returns:
-            policy: Tensor of shape [batch_size, 8, 8, 73].
+            policy: Tensor of shape [batch_size, 1968].
             value: Tensor of shape [batch_size, 3].
         """
         # Token embedding + positional encoding
+        tokens = self.add_special_tokens(tokens)
         batch_size, seq_len = tokens.shape
         position_indices = torch.arange(seq_len, device=tokens.device).unsqueeze(0)
         positional_embeds = self.positional_encoding(position_indices)
         x = self.embedding(tokens) + positional_embeds
         # Transformer decoder
         x = self.transformer(x, torch.zeros_like(x))
-        # Flatten sequence for output heads
-        x_flat = x.flatten(1)  # Shape: [batch_size, seq_len * d_model]
+        normalized_output = self.layer_norm(x)
+        # pooled_output = normalized_output.mean(dim=1)
+        last_token_output = normalized_output[:, -1, :]
         # Policy and value predictions
-        policy = self.policy_head(x_flat).view(-1, TakoNetConfig.policy_dim)
-        value = self.value_head(x_flat).view(-1, TakoNetConfig.value_dim)
+        policy = self.policy_head(last_token_output)
+        value = self.value_head(last_token_output)
         return policy, value
     
     def forward_single(self, tokens: torch.Tensor):
@@ -152,6 +157,32 @@ class TakoNet(nn.Module):
         target = target.reshape(pred.shape[0], -1)
             
         return nn.CrossEntropyLoss()(pred.to(self.device), target.to(self.device))
+    
+    def sinusoid_position_encoding(self,
+        sequence_length: int,
+        hidden_size: int,
+        max_timescale: float = 1e4,
+    ):
+        pe = torch.zeros(sequence_length, hidden_size)
+        position = torch.arange(0, sequence_length).unsqueeze(1)
+        div_term = torch.exp((torch.arange(0, hidden_size, 2, dtype=torch.float) *
+                            -(math.log(max_timescale) / hidden_size)))
+        pe[:, 0::2] = torch.sin(position.float() * div_term)
+        pe[:, 1::2] = torch.cos(position.float() * div_term)
+        return lambda _: pe
+    
+    def add_special_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """
+        Adds SOS and EOS tokens to the input sequence.
+        Args:
+            tokens (torch.Tensor): Input token sequences of shape [batch_size, seq_len].
+        Returns:
+            torch.Tensor: Sequences with SOS and EOS tokens added, shape [batch_size, seq_len + 2].
+        """
+        batch_size = tokens.size(0)
+        sos_tokens = torch.full((batch_size, 1), self.sos_token, dtype=torch.long, device=tokens.device)
+        eos_tokens = torch.full((batch_size, 1), self.eos_token, dtype=torch.long, device=tokens.device)
+        return torch.cat([sos_tokens, tokens, eos_tokens], dim=1)
     
     def count_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

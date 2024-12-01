@@ -24,10 +24,10 @@ evaluation:
     num_games: 5
 pretrain:
     batch_size: 64 
-    num_epochs: 200
+    num_epochs: 500
     validation_batch_size: 100
-    validation_interval: 5
-    alpha: 0.7
+    validation_interval: 1
+    alpha: 0.9
 
 visualize: true
 verbose: false
