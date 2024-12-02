@@ -76,15 +76,18 @@ class TakoNet(nn.Module):
                     sequence_length = self.seq_len, 
                     hidden_size = config.d_model,
                 )
+                
+        ffn_dim = config.widening_factor * config.d_model
+                
         self.transformer = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(config.d_model, 
                                        config.num_heads, 
-                                       dim_feedforward=config.widening_factor, 
+                                       dim_feedforward=ffn_dim, 
                                        batch_first=True,
                                        dropout=config.dropout),
             config.num_layers
         ).to(device)
-        self.layer_norm = nn.LayerNorm(config.d_model)
+        self.layer_norm = nn.LayerNorm(config.d_model, device=self.device)
         self.policy_head = nn.Sequential(
             nn.Linear(config.d_model, config.policy_dim),
             # nn.GELU(),
