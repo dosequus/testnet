@@ -1,7 +1,6 @@
 import torch
 import torch.backends
 from games.chessboard import ChessGame
-from model import TransformerNet
 import torch.optim as optim
 import torch.nn as nn
 from settings import Configuration
@@ -11,16 +10,19 @@ import os
 import zstandard as zstd
 import requests
 import random
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import evaluate
 from chess import Move
 from network import TakoNet, TakoNetConfig
-from tokenizer import tokenize
 from stockfish import Stockfish
 from math import ceil
 from sklearn.metrics import f1_score
-from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard.writer import SummaryWriter
+import tables
+import numpy as np
+from dataset import PuzzleDataset
+from torch.utils.data.dataloader import DataLoader
+
+
 config = Configuration().get_config()
 
 
@@ -88,97 +90,57 @@ def preprocess_data(puzzle_csv_path: str, num_puzzles: int, save_dir: str = "puz
         None
     """
     os.makedirs(save_dir, exist_ok=True)
-    train_save_path = os.path.join(save_dir, "train_chess_puzzles.pt")
-    val_save_path = os.path.join(save_dir, "val_chess_puzzles.pt")
+    save_path = os.path.join(save_dir, "data.h5")
 
     # Check if already preprocessed
-    if os.path.isfile(train_save_path) and os.path.isfile(val_save_path):
+    if os.path.isfile(save_path):
         print("Already pre-processed.")
-        return num_puzzles*.8, num_puzzles*.2
+        return;
 
     # Load the CSV into a DataFrame
     puzzles = pd.read_csv(puzzle_csv_path, nrows=num_puzzles, usecols=['FEN', 'Moves', 'Rating'])
     print(f"Loaded {len(puzzles)} puzzles from {puzzle_csv_path}.")
 
-    # Preprocess the dataset in parallel
-    results = []
-    with ProcessPoolExecutor() as executor, tqdm.tqdm(total=len(puzzles)) as pbar:
-        futures = list(executor.submit(preprocess_row, row) for _, row in puzzles.iterrows())
+    with tables.open_file(save_path, mode='w') as h5file:
+        filters = tables.Filters(complevel=5)
+    
+        state_storage = h5file.create_earray(h5file.root, "states", tables.IntAtom(), shape=(0,TakoNetConfig.seq_len), filters=filters)
+        mask_storage = h5file.create_earray(h5file.root, "masks", tables.FloatAtom(), shape=(0,TakoNetConfig.policy_dim), filters=filters)
+        policy_storage = h5file.create_earray(h5file.root, "policies", tables.FloatAtom(), shape=(0,TakoNetConfig.policy_dim), filters=filters)
+        value_storage = h5file.create_earray(h5file.root, "values", tables.FloatAtom(), shape=(0,TakoNetConfig.value_dim), filters=filters)
+        rating_storage = h5file.create_earray(h5file.root, "ratings", tables.IntAtom(), shape=(0,1), filters=filters)
 
-        for f in as_completed(futures):
-            pbar.update()
-            results.append(f.result())
+        # Preprocess rows and save to HDF5
+        for _, row in tqdm.tqdm(puzzles.iterrows(), total=len(puzzles)):
+            state, mask, policy, value, rating = preprocess_row(row)
 
-    # Unpack results
-    state_tensors, mask, policy_tensors, value_tensors, ratings = zip(*results)
-
-    # Combine tensors into datasets
-    dataset = {
-        "state_tensors": torch.stack(state_tensors),
-        "mask_tensors": torch.stack(mask),
-        "policy_tensors": torch.stack(policy_tensors),
-        "value_tensors": torch.stack(value_tensors),
-        "rating_tensors": torch.stack(ratings)
-    }
-
-    # Split into training and validation sets
-    train_indices, val_indices = train_test_split(
-        range(len(state_tensors)), test_size=0.2, random_state=42
-    )
-    train_set = {key: value[train_indices] for key, value in dataset.items()}
-    val_set = {key: value[val_indices] for key, value in dataset.items()}
-
-    # Save the datasets to disk
-    torch.save(train_set, train_save_path)
-    torch.save(val_set, val_save_path)
-
-    print(f"Training data saved to {train_save_path}")
-    print(f"Validation data saved to {val_save_path}")
-    return len(state_tensors)*.8, len(state_tensors)*.2
+            state_storage.append(state.unsqueeze(0).numpy())
+            mask_storage.append(mask.unsqueeze(0).numpy())
+            policy_storage.append(policy.unsqueeze(0).numpy())
+            value_storage.append(value.unsqueeze(0).numpy())
+            rating_storage.append(rating.reshape((1,1)).numpy())
+        
+        print(f"Preprocessed data saved to {save_path}")
 
 
-def compile_batches(batch_size: int, preprocessed_path: str = "puzzles/train_chess_puzzles.pt", device = 'cpu'):
+def get_data_loaders(hdf5_path='puzzles/data.h5', train_ratio=0.8, num_workers=4):
     """
-    Load preprocessed data and compile a random batch for training.
+    Create DataLoader objects for training and validation.
+
     Args:
+        hdf5_path (str): Path to the HDF5 file.
         batch_size (int): Number of samples per batch.
-        preprocessed_path (str): Path to the preprocessed tensors file.
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Batched state, policy, and value tensors.
+        train_ratio (float): Ratio of data used for training.
+        num_workers (int): Number of workers for data loading.
     """
-    # Load preprocessed data
-    data = torch.load(preprocessed_path, map_location=device)
-    state_tensors = data["state_tensors"]
-    policy_tensors = data["policy_tensors"]
-    value_tensors = data["value_tensors"]
-    mask_tensors = data["mask_tensors"]
-    rating_tensors = data["rating_tensors"]
+    train_dataset = PuzzleDataset(hdf5_path, split="train", train_ratio=train_ratio)
+    print(len(train_dataset))
+    val_dataset = PuzzleDataset(hdf5_path, split="val", train_ratio=train_ratio)
 
-    # Ensure all tensors have the same length
-    dataset_size = len(state_tensors)
-    assert all(len(tensor) == dataset_size for tensor in [policy_tensors, value_tensors, mask_tensors]), \
-        "Mismatch in tensor lengths in preprocessed data."
+    train_loader = DataLoader(train_dataset, batch_size=config.pretrain.batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=config.pretrain.validation_batch_size, shuffle=False, num_workers=num_workers)
 
-    # Randomly select indices for the batch
-    indices = random.sample(range(dataset_size), batch_size)
-    
-    indices = list(range(dataset_size))
-    random.shuffle(indices)
-    
-    # Create batches
-    def batch_generator():
-        for i in range(0, dataset_size, batch_size):
-            batch_indices = indices[i:i + batch_size]
-            yield (
-                state_tensors[batch_indices],
-                mask_tensors[batch_indices],
-                policy_tensors[batch_indices],
-                value_tensors[batch_indices],
-                rating_tensors[batch_indices]
-            )
-    
-    # Return batched tensors
-    return batch_generator()
+    return train_loader, val_loader
 
 def calculate_f1_score(logits, truth):
     # Convert policy logits to predicted classes
@@ -210,19 +172,19 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0, save_elo=1000):    
     csv_path = "./puzzles/lichess_db_puzzle.csv"
     print("Loading puzzles to memory...")
-    NUM_PUZZLES = 500_000
-    len_train, len_val = preprocess_data(csv_path, num_puzzles=NUM_PUZZLES)
+    NUM_PUZZLES = 1_000_000
+    preprocess_data(csv_path, num_puzzles=NUM_PUZZLES)
     print("Starting pre-training...")
     alpha = config.pretrain.alpha
     best_rating = 0
     writer = SummaryWriter(log_dir="./logs/pretraining")
+    train_loader, val_loader = get_data_loaders(num_workers=1)
     for epoch in range(starting_epoch, config.pretrain.num_epochs):
         print("Epoch:", epoch+1)
-        batch_count = ceil(len_train/config.pretrain.batch_size)
-        pbar = tqdm.tqdm(compile_batches(config.pretrain.batch_size), total=batch_count)
+        pbar = tqdm.tqdm(train_loader)
         for batch in pbar:
-            if not batch: continue
             state_tensor, mask, true_policy, true_value, ratings = batch
+            # ratings = ratings.squeeze(0)
             # Forward pass
             policy_logits, value_logits = model(state_tensor)
             # Compute loss
@@ -251,11 +213,8 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
             all_masks = []
             all_ratings = []
             val_loss = 0
-            
-            val_batch_count = ceil(len_val/config.pretrain.validation_batch_size) 
-            pbar = tqdm.tqdm(compile_batches(config.pretrain.validation_batch_size, 'puzzles/val_chess_puzzles.pt'), total=val_batch_count)
+            pbar = tqdm.tqdm(val_loader)
             for batch in pbar:
-
                 state_tensor, mask, true_policy, true_value, ratings = batch
 
                 policy_logits, value_logits = model.predict(state_tensor)

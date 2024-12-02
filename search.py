@@ -2,6 +2,7 @@ import torch
 import math
 import logging
 import numpy as np
+import time
 
 from collections import defaultdict
 
@@ -25,6 +26,7 @@ class Node:
         self.prior_prob = prior_prob
         self.visit_count = 0
         self.action_val = 0
+        self.depth = 0
         
     def UCB(self):
         return self.prior_prob / (1 + self.visit_count)
@@ -38,8 +40,11 @@ class Node:
         temperature = 0.0: Purely deterministic selection, equivalent to always choosing the highest score
     
         """
-        assert len(self.children) > 0
-        
+        try:
+            assert len(self.children) > 0
+        except AssertionError:
+            print(self.depth)
+            exit()
         # Get the action values and UCB scores for each child
         scores = np.array([child.action_val + child.UCB() for child in self.children.values()])
 
@@ -65,7 +70,8 @@ class Node:
     def create_child(self, board: Board, move: Move, val: int):
         board.push(move)
         node = Node(self, board.fen(), self.temperature*0.9, prior_prob=val)
-        if board.outcome() == Outcome(Termination.FIVEFOLD_REPETITION, None):
+        node.depth += self.depth
+        if board.outcome() == Outcome(Termination.THREEFOLD_REPETITION, None):
             node.prior_prob = self.DRAWING_MOVE_PROB
         board.pop()
         return node
@@ -106,7 +112,7 @@ class Node:
         
         # Expand children
         self.children = {move: self.create_child(game.board, move, eval) for move, eval in pred_moves.items()}
-        self.children = dict(filter(lambda x:x[1], self.children.items()))
+        # self.children = dict(filter(lambda x:x[1], self.children.items()))
 
     def backup(self):
         if self.parent:
@@ -135,7 +141,6 @@ class MCTS:
     
     def run(self, root: Node, num_sim=10, think_time=-1) -> tuple[Node, Move]:
         if think_time > 0:
-            import time
             start = time.time()
             while time.time() - start < think_time:
                 leaf = root.select_leaf()
@@ -148,6 +153,7 @@ class MCTS:
                 leaf.expand(self.nnet, self.memo)
                 leaf.backup()
                 self.add_dirichlet_noise(root)
+        print(vars(root))
         return root, root.select()[0]
 
 # Example usage:

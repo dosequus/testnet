@@ -116,7 +116,6 @@ def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path
     """
     
     stockfish_rating = 100
-    max_depth=config.evaluation.max_depth
     num_sim=config.evaluation.num_simulations
     game_board = None if not config.visualize else display.start()
 
@@ -125,26 +124,22 @@ def stockfish_benchmark(mcts: search.MCTS, num_games=10, device='cpu', save_path
         Simulate a game between two models using the provided ChessGame and search2 logic.
         Returns 1 if model1 wins, 0 if it's a draw, and -1 if model2 wins.
         """
-        game = ChessGame("rnbqkb1r/ppp1pppp/5n2/3p2B1/2PP4/8/PP2PPPP/RN1QKBNR b KQkq - 2 3")
+        game = ChessGame()
         if game_board: display.update(game.board.fen(), game_board)
         stockfish = Stockfish(depth=2) # keep stockfish at the same depth
         stockfish.set_elo_rating(stockfish_rating)
-        root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
         while not game.over():
+            
             if game.turn == color:  # model1 plays as white
-                root, best_move = mcts.run(root, think_time=1)
+                root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
+                root, best_move = mcts.run(root, think_time=2)
+                print("move: ", best_move, end='\n\n')
             else:  
                 stockfish.set_fen_position(game.board.fen())
                 best_move = Move.from_uci(stockfish.get_best_move())
             
             game.make_move(best_move)
-            
-            if best_move in root.children:
-                root = root.children[best_move]
-                root.parent = None
-            else:
-                root = search.Node(None, game.board.fen(), mcts.explore_factor**(game.move_count))
-            
+              
             if game_board: display.update(game.board.fen(), game_board)
         if game_board: display.update(game.board.fen(), game_board)
         result = game.score()
