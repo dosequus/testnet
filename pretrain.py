@@ -182,7 +182,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
         print("Epoch:", epoch+1)
         pbar = tqdm.tqdm(train_loader)
         for batch in pbar:
-            state_tensor, mask, true_policy, true_value, ratings = batch
+            state_tensor, mask, true_policy, true_value, ratings = map(lambda x: x.to(model.device), batch)
             # ratings = ratings.squeeze(0)
             # Forward pass
             policy_logits, value_logits = model(state_tensor)
@@ -214,11 +214,11 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
             val_loss = 0
             pbar = tqdm.tqdm(val_loader)
             for batch in pbar:
-                state_tensor, mask, true_policy, true_value, ratings = batch
-
+                state_tensor, mask, true_policy, true_value, ratings = map(lambda x: x.to(device), batch)
+                
                 policy_logits, value_logits = model.predict(state_tensor)
                 
-                value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value.to(model.device))
+                value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value)
                 policy_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(policy_logits + mask.log(), true_policy)
                 val_loss += ((1 - alpha) * value_loss + alpha * policy_loss).item() 
 
@@ -275,7 +275,7 @@ if __name__ == '__main__':
     else:
         device = torch.device('cpu') 
     
-    model = TakoNetConfig().create_model() # pass device to create_model for GPU
+    model = TakoNetConfig().create_model(device) # pass device to create_model for GPU
     print(f"{model.count_params():,} params")
     optimizer = optim.AdamW(model.parameters(), lr=1e-3)
     checkpoint_path = "checkpoints/best-pretrained-model.pt" # TODO: configure with command line args

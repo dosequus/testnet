@@ -30,8 +30,8 @@ class PuzzleDataset(Dataset):
         actual_idx = self.indices[idx]
         with tables.open_file(self.hdf5_path, mode="r") as h5file:
             state = torch.tensor(h5file.root.states[actual_idx])
-            mask = torch.tensor(h5file.root.masks[actual_idx])
-            policy = torch.tensor(h5file.root.policies[actual_idx])
-            value = torch.tensor(h5file.root.values[actual_idx])
+            mask = torch.tensor(h5file.root.masks[actual_idx], dtype=torch.float32)
+            policy = torch.tensor(h5file.root.policies[actual_idx], dtype=torch.float32)
+            value = torch.tensor(h5file.root.values[actual_idx], dtype=torch.float32)
             rating = torch.tensor(h5file.root.ratings[actual_idx])
         return state, mask, policy, value, rating
