@@ -99,7 +99,10 @@ def preprocess_data(puzzle_csv_path: str, num_puzzles: int, save_dir: str = "puz
         return;
 
     # Load the CSV into a DataFrame
-    puzzles = pd.read_csv(puzzle_csv_path, nrows=num_puzzles, usecols=['FEN', 'Moves', 'Rating'])
+    if num_puzzles:
+        puzzles = pd.read_csv(puzzle_csv_path, nrows=num_puzzles, usecols=['FEN', 'Moves', 'Rating'])
+    else:
+        puzzles = pd.read_csv(puzzle_csv_path, usecols=['FEN', 'Moves', 'Rating'])
     print(f"Loaded {len(puzzles)} puzzles from {puzzle_csv_path}.")
 
     with tables.open_file(save_path, mode='w') as h5file:
