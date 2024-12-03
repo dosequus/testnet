@@ -333,7 +333,7 @@ def main():
     
     # Create model
     model = TakoNetConfig(model_size=model_size).create_model(device) # pass device to create_model for GPU
-    print(f"Loaded {model_size} with {model.count_params():,} params")
+    print(f"Loaded Tako-{model_size} with {model.count_params():,} params")
     optimizer = optim.AdamW(model.parameters(), lr=1e-3)
 
     # Load checkpoint
