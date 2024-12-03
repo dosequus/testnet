@@ -134,7 +134,6 @@ def get_data_loaders(hdf5_path='puzzles/data.h5', train_ratio=0.8, num_workers=4
         num_workers (int): Number of workers for data loading.
     """
     train_dataset = PuzzleDataset(hdf5_path, split="train", train_ratio=train_ratio)
-    print(len(train_dataset))
     val_dataset = PuzzleDataset(hdf5_path, split="val", train_ratio=train_ratio)
 
     train_loader = DataLoader(train_dataset, batch_size=config.pretrain.batch_size, shuffle=True, num_workers=num_workers)
@@ -178,7 +177,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
     alpha = config.pretrain.alpha
     best_rating = 0
     writer = SummaryWriter(log_dir="./logs/pretraining")
-    train_loader, val_loader = get_data_loaders(num_workers=1)
+    train_loader, val_loader = get_data_loaders()
     for epoch in range(starting_epoch, config.pretrain.num_epochs):
         print("Epoch:", epoch+1)
         pbar = tqdm.tqdm(train_loader)
@@ -219,7 +218,7 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
 
                 policy_logits, value_logits = model.predict(state_tensor)
                 
-                value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value)
+                value_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(value_logits, true_value.to(model.device))
                 policy_loss = nn.CrossEntropyLoss(label_smoothing=0.05)(policy_logits + mask.log(), true_policy)
                 val_loss += ((1 - alpha) * value_loss + alpha * policy_loss).item() 
 
@@ -290,10 +289,9 @@ if __name__ == '__main__':
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
     
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, 
-        T_0=5, 
-        T_mult=2, 
+        T_max=config.pretrain.num_epochs, 
         eta_min=1e-6, 
         verbose=True
     )

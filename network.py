@@ -18,9 +18,9 @@ class PositionalEncodings(enum.Enum):
 class TakoNetConfig:
     vocab_size: int = VOCAB_SIZE        # Number of unique FEN tokens
     seq_len: int = SEQUENCE_LENGTH      # Fixed length of FEN token sequence
-    d_model: int = 64                  # Dimensionality of token embeddings and model layers
-    num_heads: int = 4                  # Number of attention heads in the transformer
-    num_layers: int = 4                 # Number of transformer encoder layers
+    d_model: int = 256                  # Dimensionality of token embeddings and model layers
+    num_heads: int = 8                  # Number of attention heads in the transformer
+    num_layers: int = 8                 # Number of transformer encoder layers
     policy_dim: int = NUM_ACTIONS       # Dimensionality of policy head output
     value_dim: int = 3                  # Dimensionality of value head output
     dropout: Optional[float] = 0      # Dropout rate for transformer layers
@@ -189,4 +189,11 @@ class TakoNet(nn.Module):
     
     def count_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def get_canonical_name(self):
+        param_count = float(self.count_params())
+        suffix = ['', 'K', 'M', 'B']
+        idx = max(0, min(len(suffix)-1, int(math.floor(math.log10(param_count)/3))))
+        return f'tako-{param_count / 10**(3 * idx):.0f}{suffix[idx]}'
+        
         
