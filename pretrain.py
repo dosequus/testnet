@@ -7,6 +7,7 @@ from settings import Configuration
 import tqdm
 import pandas as pd
 import os
+import argparse
 import zstandard as zstd
 import requests
 import random
@@ -168,12 +169,15 @@ def calculate_top_k_accuracy(logits, truth, k = 3):
 
     return top_k_accuracy
 
-def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.optim.lr_scheduler._LRScheduler, starting_epoch=0, save_elo=1000):    
-    csv_path = "./puzzles/lichess_db_puzzle.csv"
-    print("Loading puzzles to memory...")
-    NUM_PUZZLES = 1_000_000
-    preprocess_data(csv_path, num_puzzles=NUM_PUZZLES)
-    print("Starting pre-training...")
+def train(model: TakoNet, optimizer: torch.optim.Optimizer, starting_epoch=0):    
+    
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, 
+        T_max=config.pretrain.num_epochs, 
+        eta_min=1e-6, 
+        verbose=True
+    )
+    
     alpha = config.pretrain.alpha
     best_rating = 0
     writer = SummaryWriter(log_dir="./logs/pretraining")
@@ -265,8 +269,8 @@ def train(model: TakoNet, optimizer: torch.optim.Optimizer, scheduler: torch.opt
         # scheduler step
         scheduler.step()        
     writer.close()
-
-if __name__ == '__main__':
+    
+def choose_device():
     # Determine the device to use: CUDA > MPS > CPU
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -274,12 +278,65 @@ if __name__ == '__main__':
         device = torch.device('mps')
     else:
         device = torch.device('cpu') 
+    return device
     
-    model = TakoNetConfig().create_model(device) # pass device to create_model for GPU
-    print(f"{model.count_params():,} params")
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Pretrain tako chess model and manage checkpoints.")
+    parser.add_argument(
+        '--device',
+        default=choose_device(),
+        help='Device to run the model on (default: auto)'
+    )
+    parser.add_argument(
+        '--model_size',
+        type=str,
+        default='small',
+        help='Configure size of the model (default: small)'
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default="checkpoints/best-pretrained-model.pt",
+        help="Path to save or load model checkpoints (default: checkpoints/best-pretrained-model.pt)"
+    )
+    parser.add_argument(
+        "--save_path",
+        type=str,
+        default="models/final_model.pt",
+        help="Path to save the final trained model (default: models/final_model.pt)"
+    )
+    parser.add_argument(
+        "--num_puzzles",
+        type=int,
+        default=None,
+        help="Number of puzzles to train on (default: all)"
+    )
+    parser.add_argument(
+        "--puzzle_path",
+        type=str,
+        default="puzzles/lichess_db_puzzle.csv",
+        help="Path to puzzle dataset (default: puzzles/lichess_db_puzzle.csv)"
+    )
+    args = parser.parse_args()
+    
+    model_size = args.model_size   
+    checkpoint_path = args.checkpoint_path
+    save_path = args.save_path
+    device = args.device
+    num_puzzles = args.device
+    csv_path = args.puzzle_path
+    
+    # Ensure directories exist
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    
+    # Create model
+    model = TakoNetConfig(model_size=model_size).create_model(device) # pass device to create_model for GPU
+    print(f"Loaded {model_size} with {model.count_params():,} params")
     optimizer = optim.AdamW(model.parameters(), lr=1e-3)
-    checkpoint_path = "checkpoints/best-pretrained-model.pt" # TODO: configure with command line args
-    epoch = 0
+
+    # Load checkpoint
     if os.path.isfile(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=model.device)
@@ -288,18 +345,21 @@ if __name__ == '__main__':
         print("Checkpoint loaded successfully.")
     else:
         print(f"No checkpoint found at {checkpoint_path}, starting from scratch.")
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, 
-        T_max=config.pretrain.num_epochs, 
-        eta_min=1e-6, 
-        verbose=True
-    )
-    print(config)
+        
+    # download dataset
     download_training_set()
-    train(model, optimizer, scheduler, starting_epoch=0)
+    print("Loading puzzles to memory...")
+    preprocess_data(csv_path, num_puzzles)
+    
+    print("Training the model...")
+    train(model, optimizer, starting_epoch=0)
+
+    print(f"Saving final model to: {save_path}")
+    # (Add logic to save the final model)
     torch.save({
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'epoch': 0
-    }, f'checkpoints/best-model.pt') 
+    }, f'{save_path}/{model.get_canonical_name()}.pt') 
+
+if __name__ == '__main__':
+    print(config)
+    main()

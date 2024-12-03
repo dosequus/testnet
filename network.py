@@ -18,16 +18,37 @@ class PositionalEncodings(enum.Enum):
 class TakoNetConfig:
     vocab_size: int = VOCAB_SIZE        # Number of unique FEN tokens
     seq_len: int = SEQUENCE_LENGTH      # Fixed length of FEN token sequence
-    d_model: int = 256                  # Dimensionality of token embeddings and model layers
-    num_heads: int = 8                  # Number of attention heads in the transformer
-    num_layers: int = 8                 # Number of transformer encoder layers
+    model_size: str = 'medium'          # Size of the model: 'tiny', 'small', 'medium', 'large'
     policy_dim: int = NUM_ACTIONS       # Dimensionality of policy head output
     value_dim: int = 3                  # Dimensionality of value head output
-    dropout: Optional[float] = 0      # Dropout rate for transformer layers
+    dropout: Optional[float] = 0        # Dropout rate for transformer layers
     widening_factor: int = 4
     pos_encodings: PositionalEncodings = PositionalEncodings.LEARNED
 
-    def create_model(self, device = 'cpu'):
+    # Static mapping for configurable sizes
+    SIZE_CONFIGS = {
+        'tiny': {'d_model': 64, 'num_heads': 4, 'num_layers': 4},
+        'small': {'d_model': 256, 'num_heads': 8, 'num_layers': 6},
+        'medium': {'d_model': 512, 'num_heads': 8, 'num_layers': 8},
+        'large': {'d_model': 1024, 'num_heads': 8, 'num_layers': 16},
+    }
+
+    @property
+    def d_model(self) -> int:
+        """Returns the `d_model` size based on the `model_size`."""
+        return self.SIZE_CONFIGS[self.model_size]['d_model']
+
+    @property
+    def num_heads(self) -> int:
+        """Returns the `num_heads` size based on the `model_size`."""
+        return self.SIZE_CONFIGS[self.model_size]['num_heads']
+
+    @property
+    def num_layers(self) -> int:
+        """Returns the `num_layers` size based on the `model_size`."""
+        return self.SIZE_CONFIGS[self.model_size]['num_layers']
+
+    def create_model(self, device='cpu'):
         """
         Creates a TakoNet model using the current configuration.
         
@@ -38,8 +59,7 @@ class TakoNetConfig:
         return TakoNet(
             config=self,
             device=device
-        )
-        
+        )        
         
 class TakoNet(nn.Module):
     
